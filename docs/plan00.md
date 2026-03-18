@@ -53,11 +53,11 @@ clean:
 
 Set up the Go module, directory layout, Makefile, and a minimal `main.go` that compiles.
 
-- [ ] Run `go mod init` with the correct module path
-- [ ] Create directory structure: `cmd/omni-code/`, `internal/db/`, `internal/indexer/`, `internal/chunker/`, `internal/mcp/`, `docs/`, `test-data/`
-- [ ] Create `Makefile` with targets: `build`, `test`, `dev`, `docker-db`, `clean`
-- [ ] Create minimal `cmd/omni-code/main.go` that parses subcommands (`index`, `search`, `mcp`) and prints usage
-- [ ] Verify `make build` compiles and `make test` passes (no-op is fine)
+- [x] Run `go mod init` with the correct module path
+- [x] Create directory structure: `cmd/omni-code/`, `internal/db/`, `internal/indexer/`, `internal/chunker/`, `internal/mcp/`, `docs/`, `test-data/`
+- [x] Create `Makefile` with targets: `build`, `test`, `dev`, `docker-db`, `clean`
+- [x] Create minimal `cmd/omni-code/main.go` that parses subcommands (`index`, `search`, `mcp`) and prints usage
+- [x] Verify `make build` compiles and `make test` passes (no-op is fine)
 
 ---
 
@@ -74,14 +74,14 @@ Connect to ChromaDB, ensure required collections exist, and expose CRUD helpers 
 
 **Tasks:**
 
-- [ ] Implement `NewChromaClient(ctx, baseURL) (*ChromaClient, error)` — creates HTTP client, pings server, returns wrapper
-- [ ] Implement `EnsureCollections(ctx)` — calls `GetOrCreateCollection` for `files` and `chunks`
-- [ ] Implement `GetFileMeta(ctx, repo, path) (*FileMeta, error)` — retrieves stored size/mtime/hash for a file (returns nil if not found)
-- [ ] Implement `UpsertFileMeta(ctx, repo, path, size, mtime, hash)` — upserts a record into `files`
-- [ ] Implement `UpsertChunks(ctx, chunks []Chunk)` — batch-upserts chunk documents with metadata into `chunks`
-- [ ] Implement `DeleteFileChunks(ctx, repo, path)` — removes all chunks for a file before re-indexing it (stale chunk cleanup)
-- [ ] Implement `QueryChunks(ctx, queryText string, nResults int, repoFilter string) ([]ChunkResult, error)` — semantic similarity search on `chunks`
-- [ ] Write tests with a running ChromaDB instance (skip if `CHROMA_URL` env not set)
+- [x] Implement `NewChromaClient(ctx, baseURL) (*ChromaClient, error)` — creates HTTP client, pings server, returns wrapper
+- [x] Implement `EnsureCollections(ctx, ef)` — calls `GetOrCreateCollection` for `files` and `chunks`
+- [x] Implement `GetFileMeta(ctx, repo, path) (*FileMeta, error)` — retrieves stored size/mtime/hash for a file (returns nil if not found)
+- [x] Implement `UpsertFileMeta(ctx, repo, path, size, mtime, hash)` — upserts a record into `files`
+- [x] Implement `UpsertChunks(ctx, chunks []Chunk)` — batch-upserts chunk documents with metadata into `chunks`
+- [x] Implement `DeleteFileChunks(ctx, repo, path)` — removes all chunks for a file before re-indexing it (stale chunk cleanup)
+- [x] Implement `QueryChunks(ctx, queryText string, nResults int, repoFilter string) ([]ChunkResult, error)` — semantic similarity search on `chunks`
+- [x] Write tests with a running ChromaDB instance (skip if `CHROMA_URL` env not set)
 
 ---
 
@@ -109,16 +109,16 @@ Walk a repository directory tree, skip ignored paths, detect which files changed
 
 **Tasks:**
 
-- [ ] Define `IndexerConfig` struct: root path, repo name, ChromaDB client, skip lists
-- [ ] Implement `filepath.WalkDir` walker that respects skip rules (dirs, extensions, filenames)
-- [ ] Load and apply `.gitignore` rules using `go-gitignore` library at each repo root
-- [ ] Implement `HasChanged(ctx, filePath, stat) (bool, error)` using the Size → MTime → Hash cascade
-- [ ] Implement SHA-256 file hasher with mtime+size cache key (avoid redundant reads)
-- [ ] Implement global deduplication with `sync.Mutex`-protected `seenHashes` map
-- [ ] Implement `RunIndex(ctx, config) (*IndexStats, error)` — orchestrates the full walk+detect+chunk+store pipeline
-- [ ] Use `goroutines` + `sync.WaitGroup` + buffered channel for parallel file processing
-- [ ] Track and return `IndexStats`: files scanned, changed, skipped (dedup), skipped (unchanged), chunks upserted, errors
-- [ ] Write table-driven unit tests for skip rules, change detection logic, and deduplication
+- [x] Define `IndexerConfig` struct: root path, repo name, ChromaDB client, skip lists
+- [x] Implement `filepath.WalkDir` walker that respects skip rules (dirs, extensions, filenames)
+- [x] Load and apply `.gitignore` rules using `go-gitignore` library at each repo root
+- [x] Implement `HasChanged(ctx, filePath, stat) (bool, error)` using the Size → MTime → Hash cascade
+- [x] Implement SHA-256 file hasher with mtime+size cache key (avoid redundant reads)
+- [x] Implement global deduplication with `sync.Mutex`-protected `seenHashes` map
+- [x] Implement `RunIndex(ctx, config) (*IndexStats, error)` — orchestrates the full walk+detect+chunk+store pipeline
+- [x] Use `goroutines` + `sync.WaitGroup` + buffered channel for parallel file processing
+- [x] Track and return `IndexStats`: files scanned, changed, skipped (dedup), skipped (unchanged), chunks upserted, errors
+- [x] Write table-driven unit tests for skip rules, change detection logic, and deduplication
 
 ---
 
@@ -132,7 +132,7 @@ Split source files into semantically meaningful chunks suitable for embedding. U
 |---|---|---|
 | File < 1000 chars | Return entire file as 1 chunk | — |
 | Code file (`.go`, `.ts`, `.js`, `.py`, `.rs`, `.java`, `.c`, `.cpp`, `.rb`) | Tree-sitter AST split at top-level declarations (`function_declaration`, `method_declaration`, `class_declaration`, `type_declaration`) | ~800 tokens per chunk, 50-token overlap |
-| Text / Markdown / other | Line-based split | ~500 words per chunk, 50-word overlap |
+| Text / Markdown / Docker / Other | Line-based split | ~500 words per chunk, 50-word overlap |
 
 **Chunk struct:**
 
