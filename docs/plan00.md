@@ -151,15 +151,17 @@ type Chunk struct {
 
 **Tasks:**
 
-- [ ] Define `Chunk` struct and `ChunkFile(repo, path, content string, lang string) ([]Chunk, error)` entry point
-- [ ] Implement small-file shortcut (< 1000 chars → single chunk)
-- [ ] Implement Tree-sitter parsing for Go (install `tree_sitter_go` grammar)
-- [ ] Implement Tree-sitter parsing for JavaScript/TypeScript
-- [ ] Implement Tree-sitter parsing for Python
-- [ ] Implement fallback line-based splitter for text/markdown/unknown files
-- [ ] Handle overlap: when a Tree-sitter node exceeds ~800 tokens, split it with overlap
-- [ ] Generate deterministic chunk IDs (SHA-256 of repo+path+startLine)
-- [ ] Write tests: small file, Go code, JS code, plain text, large single function
+- [x] Define `Chunk` struct and `ChunkFile(repo, path, content string, lang string) ([]Chunk, error)` entry point
+- [x] Implement small-file shortcut (< 1000 chars → single chunk)
+- [x] Implement Tree-sitter parsing for Go (install `tree_sitter_go` grammar)
+- [x] Implement Tree-sitter parsing for JavaScript/TypeScript
+- [x] Implement Tree-sitter parsing for Python
+- [x] Implement Tree-sitter parsing for Dockerfiles (if grammar available)
+- [x] Implement Tree-sitter parsing for CircleCI (if grammar available)
+- [x] Implement fallback line-based splitter for text/markdown/unknown files
+- [x] Handle overlap: when a Tree-sitter node exceeds ~800 tokens, split it with overlap
+- [x] Generate deterministic chunk IDs (SHA-256 of repo+path+startLine)
+- [x] Write tests: small file, Go code, JS code, plain text, large single function
 
 ---
 
@@ -177,12 +179,12 @@ Wire everything together behind a clean CLI with three subcommands.
 
 **Tasks:**
 
-- [ ] Implement subcommand routing using `os.Args` + `flag.NewFlagSet` per subcommand
-- [ ] Implement `index` subcommand: parse flags → create ChromaClient → run `indexer.RunIndex` → print `IndexStats` summary
-- [ ] Implement `search` subcommand: parse flags → create ChromaClient → call `QueryChunks` → format and print results (path, lines, snippet)
-- [ ] Implement `mcp` subcommand: parse flags → create ChromaClient → start MCP server (Phase 5)
-- [ ] Print usage/help when no subcommand or `--help` is given
-- [ ] Ensure all logging goes to `os.Stderr`; only the `mcp` subcommand writes to `os.Stdout` (the JSON-RPC stream)
+- [x] Implement subcommand routing using `os.Args` + `flag.NewFlagSet` per subcommand
+- [x] Implement `index` subcommand: parse flags → create ChromaClient → run `indexer.RunIndex` → print `IndexStats` summary
+- [x] Implement `search` subcommand: parse flags → create ChromaClient → call `QueryChunks` → format and print results (path, lines, snippet)
+- [x] Implement `mcp` subcommand: parse flags → create ChromaClient → start MCP server (Phase 5)
+- [x] Print usage/help when no subcommand or `--help` is given
+- [x] Ensure all logging goes to `os.Stderr`; only the `mcp` subcommand writes to `os.Stdout` (the JSON-RPC stream)
 - [ ] End-to-end manual smoke test: `make docker-db`, populate `test-data/`, `make dev`, `omni-code search --query "main function"`
 
 ---
@@ -208,12 +210,12 @@ Expose the search functionality as an MCP tool so Copilot can call it over stdio
 
 **Tasks:**
 
-- [ ] Create MCP server using `server.NewServer("omni-code", "1.0.0")` from `go-sdk`
-- [ ] Register `search_codebase` tool with input schema (query, repo, n_results)
-- [ ] Implement tool handler: validate input → call `db.QueryChunks` → format results as markdown text
-- [ ] Call `server.ServeStdio(s)` in the `mcp` subcommand — this blocks and handles JSON-RPC over stdin/stdout
-- [ ] Ensure **zero** `fmt.Print*` calls in `internal/mcp/` — all logs to `os.Stderr` via `log.Printf`
-- [ ] Write test: mock or local ChromaDB, invoke tool handler directly, assert markdown output format
+- [x] Create MCP server using `server.NewServer("omni-code", "1.0.0")` from `go-sdk`
+- [x] Register `search_codebase` tool with input schema (query, repo, n_results)
+- [x] Implement tool handler: validate input → call `db.QueryChunks` → format results as markdown text
+- [x] Call `server.ServeStdio(s)` in the `mcp` subcommand — this blocks and handles JSON-RPC over stdin/stdout
+- [x] Ensure **zero** `fmt.Print*` calls in `internal/mcp/` — all logs to `os.Stderr` via `log.Printf`
+- [x] Write test: mock or local ChromaDB, invoke tool handler directly, assert markdown output format
 
 ---
 
@@ -223,13 +225,13 @@ Connect the built binary to GitHub Copilot as an MCP server and validate the ful
 
 **Tasks:**
 
-- [ ] Add MCP server config to VS Code `settings.json` (or `.vscode/mcp.json`): `{ "servers": { "omni-code": { "command": "/path/to/bin/omni-code", "args": ["mcp"] } } }`
+- [x] Add MCP server config to VS Code `settings.json` (or `.vscode/mcp.json`): `{ "servers": { "omni-code": { "command": "/path/to/bin/omni-code", "args": ["mcp"] } } }`
 - [ ] Verify Copilot discovers the `search_codebase` tool
 - [ ] Test a real query from Copilot Chat: "How does the indexer detect file changes?"
 - [ ] Index at least 2 real local repos and verify search returns relevant results
-- [ ] Add `--verbose` / `--quiet` flags to control log output level
-- [ ] Write a `README.md` with: project description, setup instructions, usage examples, Copilot configuration
-- [ ] Final pass: `make test` passes, `go vet ./...` clean, no TODO/FIXME left in code
+- [x] Add `--verbose` / `--quiet` flags to control log output level
+- [x] Write a `README.md` with: project description, setup instructions, usage examples, Copilot configuration
+- [x] Final pass: `make test` passes, `go vet ./...` clean, no TODO/FIXME left in code
 
 ---
 

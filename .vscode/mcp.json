@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "omni-code": {
+      "command": "${workspaceFolder}/bin/omni-code",
+      "args": ["mcp"]
+    }
+  }
+}
