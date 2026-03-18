@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -86,5 +87,70 @@ func TestHandleSearch_NoResults(t *testing.T) {
 	text := result.Content[0].(*sdkmcp.TextContent).Text
 	if !strings.Contains(text, "No results") {
 		t.Errorf("expected 'No results' message, got: %s", text)
+	}
+}
+
+func TestFormatListReposResult(t *testing.T) {
+	metas := []db.RepoMeta{
+		{Repo: "repo1", CurrentBranch: "main", LastIndexedCommit: "1234567890", LastIndexedAt: "now", FileCount: 1, ChunkCount: 1},
+	}
+	res, _, err := formatListReposResult(metas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := res.Content[0].(*sdkmcp.TextContent).Text
+	if !strings.Contains(text, "repo1") || !strings.Contains(text, "12345678") {
+		t.Errorf("output missing expected repo/commit details: %v", text)
+	}
+}
+
+func TestFormatGetRepoFilesResult(t *testing.T) {
+	files := []db.FileMeta{
+		{Path: "pkg/foo/bar.go"},
+		{Path: "cmd/main.go"},
+		{Path: "baz.py"},
+	}
+
+	// test no filter
+	res, _, err := formatGetRepoFilesResult(files, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := res.Content[0].(*sdkmcp.TextContent).Text
+	if !strings.Contains(text, "pkg/foo/bar.go") || !strings.Contains(text, "baz.py") {
+		t.Errorf("missing paths without filter: %v", text)
+	}
+
+	// test with filter
+	res, _, err = formatGetRepoFilesResult(files, "*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = res.Content[0].(*sdkmcp.TextContent).Text
+	if strings.Contains(text, "baz.py") {
+		t.Errorf("filter didn't work: %v", text)
+	}
+	if !strings.Contains(text, "cmd/main.go") {
+		t.Errorf("filter filtered too much: %v", text)
+	}
+}
+
+func TestHandleGetFileContent_Direct(t *testing.T) {
+	f, err := os.CreateTemp("", "testfile*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.WriteString("hello world")
+	f.Close()
+
+	// Since we pass an absolute path, client is ignored
+	res, _, err := handleGetFileContent(context.Background(), nil, fileContentParams{Repo: "anything", Path: f.Name()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := res.Content[0].(*sdkmcp.TextContent).Text
+	if !strings.Contains(text, "hello world") {
+		t.Errorf("expected file content, got: %s", text)
 	}
 }

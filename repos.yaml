@@ -1,0 +1,11 @@
+db: http://localhost:8000
+embedding_backend: chroma-default
+
+skip_dirs_extra: []
+skip_extensions_extra: []
+skip_filenames_extra: []
+
+repos:
+  - name: omni-code
+    path: /mnt/plex_media/git/omni-code
+    branch: main

@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -30,6 +33,27 @@ func ServeStdio(ctx context.Context, client *db.ChromaClient) error {
 		return handleSearch(ctx, client, args)
 	})
 
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "list_repos",
+		Description: "List all indexed repositories with stats (branch, last commit, file count, chunk count).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
+		return handleListRepos(ctx, client)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_repo_files",
+		Description: "List files indexed for a repository, with optional glob filter.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args repoFilesParams) (*mcp.CallToolResult, any, error) {
+		return handleGetRepoFiles(ctx, client, args)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_file_content",
+		Description: "Read the raw content of a file from disk (max 100 KB).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args fileContentParams) (*mcp.CallToolResult, any, error) {
+		return handleGetFileContent(ctx, client, args)
+	})
+
 	log.Printf("[mcp] server starting on stdio")
 	return s.Run(ctx, &mcp.StdioTransport{})
 }
@@ -44,7 +68,10 @@ func handleSearch(ctx context.Context, client *db.ChromaClient, args searchParam
 		n = 10
 	}
 
-	results, err := client.QueryChunks(ctx, args.Query, n, args.Repo)
+	results, err := client.QueryChunks(ctx, args.Query, db.QueryOpts{
+		NResults:   n,
+		RepoFilter: args.Repo,
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("search failed: %w", err)
 	}
@@ -73,5 +100,131 @@ func handleSearchWithResults(results []db.ChunkResult, query string) (*mcp.CallT
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: sb.String()},
 		},
+	}, nil, nil
+}
+
+// handleListRepos returns a markdown table of all indexed repos.
+func handleListRepos(ctx context.Context, client *db.ChromaClient) (*mcp.CallToolResult, any, error) {
+	metas, err := client.ListRepoMeta(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list repos: %w", err)
+	}
+	return formatListReposResult(metas)
+}
+
+func formatListReposResult(metas []db.RepoMeta) (*mcp.CallToolResult, any, error) {
+	if len(metas) == 0 {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "No repositories indexed yet."}},
+		}, nil, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("| Repo | Branch | Last Commit | Last Indexed | Files | Chunks |\n")
+	sb.WriteString("|------|--------|-------------|--------------|-------|--------|\n")
+	for _, m := range metas {
+		commit := m.LastIndexedCommit
+		if len(commit) > 8 {
+			commit = commit[:8]
+		}
+		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %d | %d |\n",
+			m.Repo, m.CurrentBranch, commit, m.LastIndexedAt, m.FileCount, m.ChunkCount)
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
+	}, nil, nil
+}
+
+type repoFilesParams struct {
+	Repo   string `json:"repo"   jsonschema:"required,Repository name"`
+	Filter string `json:"filter" jsonschema:"Optional glob pattern to filter file paths (e.g. '*.go')"`
+}
+
+// handleGetRepoFiles lists indexed files for a repo, applying an optional glob filter.
+func handleGetRepoFiles(ctx context.Context, client *db.ChromaClient, args repoFilesParams) (*mcp.CallToolResult, any, error) {
+	if args.Repo == "" {
+		return nil, nil, fmt.Errorf("repo parameter is required")
+	}
+	files, err := client.QueryAllFileMeta(ctx, args.Repo)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list files: %w", err)
+	}
+
+	return formatGetRepoFilesResult(files, args.Filter)
+}
+
+func formatGetRepoFilesResult(files []db.FileMeta, filter string) (*mcp.CallToolResult, any, error) {
+	var matched []string
+	for _, f := range files {
+		if filter != "" {
+			base := path.Base(f.Path)
+			ok, _ := path.Match(filter, base)
+			if !ok {
+				ok, _ = path.Match(filter, f.Path)
+			}
+			if !ok {
+				continue
+			}
+		}
+		matched = append(matched, f.Path)
+	}
+
+	if len(matched) == 0 {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "No files found."}},
+		}, nil, nil
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: strings.Join(matched, "\n")}},
+	}, nil, nil
+}
+
+type fileContentParams struct {
+	Repo string `json:"repo" jsonschema:"required,Repository name"`
+	Path string `json:"path" jsonschema:"required,File path relative to repo root (or absolute)"`
+}
+
+const maxFileContentBytes = 100 * 1024 // 100 KB
+
+// handleGetFileContent reads a file from disk, resolving the path via repo metadata.
+func handleGetFileContent(ctx context.Context, client *db.ChromaClient, args fileContentParams) (*mcp.CallToolResult, any, error) {
+	if args.Repo == "" || args.Path == "" {
+		return nil, nil, fmt.Errorf("repo and path parameters are required")
+	}
+
+	absPath := args.Path
+	if !filepath.IsAbs(absPath) {
+		meta, err := client.GetRepoMeta(ctx, args.Repo)
+		if err != nil || meta == nil {
+			return nil, nil, fmt.Errorf("repo %q not found", args.Repo)
+		}
+		absPath = filepath.Join(meta.RootPath, args.Path)
+	}
+
+	// Guard against path traversal.
+	absPath = filepath.Clean(absPath)
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("file not found: %w", err)
+	}
+	if info.Size() > maxFileContentBytes {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{
+				Text: fmt.Sprintf("File is too large (%d bytes > 100 KB limit). Use search_codebase instead.", info.Size()),
+			}},
+		}, nil, nil
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read file: %w", err)
+	}
+
+	ext := strings.TrimPrefix(filepath.Ext(absPath), ".")
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{
+			Text: fmt.Sprintf("```%s\n%s\n```", ext, string(data)),
+		}},
 	}, nil, nil
 }

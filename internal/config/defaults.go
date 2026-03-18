@@ -1,0 +1,38 @@
+package config
+
+// DefaultSkipDirs contains directory names skipped during file walking by default.
+var DefaultSkipDirs = []string{
+	".git", "node_modules", "dist", "build",
+	"vendor", ".next", "__pycache__", ".venv", ".tox",
+}
+
+// DefaultSkipExtensions contains file extensions skipped by default.
+var DefaultSkipExtensions = []string{
+	".pdf", ".png", ".jpg", ".jpeg", ".gif",
+	".svg", ".mp4", ".mp3", ".zip", ".tar",
+	".gz", ".exe", ".dll", ".so", ".dylib",
+	".wasm", ".bin", ".dat", ".db", ".sqlite",
+}
+
+// DefaultSkipFilenames contains exact filenames skipped by default.
+var DefaultSkipFilenames = []string{
+	".env", "package-lock.json", "yarn.lock",
+	"go.sum", ".DS_Store", "Thumbs.db",
+}
+
+// DefaultSkipDirsMap is DefaultSkipDirs as a fast-lookup map.
+var DefaultSkipDirsMap = listToMap(DefaultSkipDirs)
+
+// DefaultSkipExtensionsMap is DefaultSkipExtensions as a fast-lookup map.
+var DefaultSkipExtensionsMap = listToMap(DefaultSkipExtensions)
+
+// DefaultSkipFilenamesMap is DefaultSkipFilenames as a fast-lookup map.
+var DefaultSkipFilenamesMap = listToMap(DefaultSkipFilenames)
+
+func listToMap(ss []string) map[string]bool {
+	m := make(map[string]bool, len(ss))
+	for _, s := range ss {
+		m[s] = true
+	}
+	return m
+}

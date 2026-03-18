@@ -11,43 +11,29 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	gitignore "github.com/sabhiram/go-gitignore"
 
+	"github.com/ramayac/omni-code/internal/config"
 	"github.com/ramayac/omni-code/internal/db"
+	"github.com/ramayac/omni-code/internal/git"
 )
 
-// Hardcoded skip lists per plan specification.
-var skipDirNames = map[string]bool{
-	".git": true, "node_modules": true, "dist": true, "build": true,
-	"vendor": true, ".next": true, "__pycache__": true, ".venv": true, ".tox": true,
-}
-
-var skipExtensions = map[string]bool{
-	".pdf": true, ".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
-	".svg": true, ".mp4": true, ".mp3": true, ".zip": true, ".tar": true,
-	".gz": true, ".exe": true, ".dll": true, ".so": true, ".dylib": true,
-	".wasm": true, ".bin": true, ".dat": true, ".db": true, ".sqlite": true,
-}
-
-var skipFilenames = map[string]bool{
-	".env": true, "package-lock.json": true, "yarn.lock": true,
-	"go.sum": true, ".DS_Store": true, "Thumbs.db": true,
-}
-
-// ShouldSkipDir reports whether a directory name should be skipped entirely during walking.
+// ShouldSkipDir reports whether a directory name should be skipped.
+// Uses the built-in defaults; RunIndex uses cfg.SkipDirs for per-run overrides.
 func ShouldSkipDir(name string) bool {
-	return skipDirNames[name]
+	return config.DefaultSkipDirsMap[name]
 }
 
-// shouldSkipFile reports whether a file should be skipped based on its name, extension, or
-// .gitignore rules. gi may be nil if no .gitignore exists at the repo root.
-func shouldSkipFile(path string, repoRoot string, gi *gitignore.GitIgnore) bool {
+// shouldSkipFile reports whether a file should be skipped based on its name,
+// extension, or .gitignore rules. gi may be nil.
+func shouldSkipFile(path string, repoRoot string, skipExts, skipNames map[string]bool, gi *gitignore.GitIgnore) bool {
 	base := filepath.Base(path)
-	if skipFilenames[base] {
+	if skipNames[base] {
 		return true
 	}
-	if skipExtensions[strings.ToLower(filepath.Ext(base))] {
+	if skipExts[strings.ToLower(filepath.Ext(base))] {
 		return true
 	}
 	if gi != nil {
@@ -59,7 +45,7 @@ func shouldSkipFile(path string, repoRoot string, gi *gitignore.GitIgnore) bool 
 	return false
 }
 
-// DetectLanguage returns a canonical language name from a file's extension.
+// DetectLanguage returns a canonical language name from a file extension.
 func DetectLanguage(path string) string {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".go":
@@ -88,18 +74,24 @@ func DetectLanguage(path string) string {
 }
 
 // ChunkFunc is the signature used to chunk a file's content into indexable segments.
-// The chunker package (Phase 3) satisfies this signature.
 type ChunkFunc func(repo, path, content, lang string) ([]db.Chunk, error)
 
 // IndexerConfig holds all parameters for a single indexing run.
 type IndexerConfig struct {
-	RootPath string // Absolute path to the repository root.
-	RepoName string // Logical repository name stored in ChromaDB.
+	RootPath string
+	RepoName string
 	DB       *db.ChromaClient
 	ChunkFn  ChunkFunc
 	// SeenHashes enables global deduplication across multiple RunIndex calls.
-	// Pass nil to create a fresh map scoped to this run only.
 	SeenHashes *sync.Map
+	// Resolved skip lists. If nil, config package defaults are used.
+	SkipDirs       map[string]bool
+	SkipExtensions map[string]bool
+	SkipFilenames  map[string]bool
+	// Branch is the expected branch; empty = auto-detect.
+	Branch          string
+	StrictBranch    bool
+	SkipBranchCheck bool
 }
 
 // IndexStats reports the outcome of a RunIndex call.
@@ -108,12 +100,15 @@ type IndexStats struct {
 	FilesChanged   int
 	FilesUnchanged int
 	FilesDedupSkip int
+	DeletedFiles   int
 	ChunksUpserted int
 	Errors         int
+	Branch         string
+	LastCommit     string
+	IndexMode      string // "full" or "incremental"
 }
 
 // hashCache avoids reading the same file twice within a single run.
-// Cache key format: "<size>:<mtime>:<absolutePath>".
 type hashCache struct {
 	mu    sync.Mutex
 	cache map[string]string
@@ -126,8 +121,7 @@ func newHashCache() *hashCache {
 func (h *hashCache) get(key string) (string, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	v, ok := h.cache[key]
-	return v, ok
+	return h.cache[key], h.cache[key] != ""
 }
 
 func (h *hashCache) set(key, val string) {
@@ -136,8 +130,7 @@ func (h *hashCache) set(key, val string) {
 	h.cache[key] = val
 }
 
-// HashFile computes the SHA-256 digest of a file, using a mtime+size cache key to skip
-// redundant disk reads when the same file is encountered more than once in a run.
+// HashFile computes SHA-256 of a file, caching by size+mtime.
 func HashFile(path string, size, mtime int64, cache *hashCache) (string, error) {
 	cacheKey := fmt.Sprintf("%d:%d:%s", size, mtime, path)
 	if h, ok := cache.get(cacheKey); ok {
@@ -157,14 +150,8 @@ func HashFile(path string, size, mtime int64, cache *hashCache) (string, error) 
 	return hash, nil
 }
 
-// HasChanged determines whether a file has changed since it was last indexed.
-// Returns (changed bool, currentHash string, error).
-//
-// The Size → MTime → Hash cascade is sacred — do not reorder.
-// Steps:
-//  1. SIZE   — fast O(1); if different, the file changed.
-//  2. MTIME  — fast O(1); if different, compute hash to confirm.
-//  3. Both match — trust the file is unchanged (no hash needed).
+// HasChanged determines whether a file has changed since last index.
+// Size → MTime → Hash cascade is sacred — do not reorder.
 func HasChanged(ctx context.Context, client *db.ChromaClient, repo, filePath string, info os.FileInfo, cache *hashCache) (bool, string, error) {
 	size := info.Size()
 	mtime := info.ModTime().Unix()
@@ -173,8 +160,6 @@ func HasChanged(ctx context.Context, client *db.ChromaClient, repo, filePath str
 	if err != nil {
 		return false, "", fmt.Errorf("get file meta: %w", err)
 	}
-
-	// Never indexed before — definitely changed.
 	if meta == nil {
 		hash, err := HashFile(filePath, size, mtime, cache)
 		if err != nil {
@@ -182,8 +167,6 @@ func HasChanged(ctx context.Context, client *db.ChromaClient, repo, filePath str
 		}
 		return true, hash, nil
 	}
-
-	// 1. SIZE check.
 	if size != meta.Size {
 		hash, err := HashFile(filePath, size, mtime, cache)
 		if err != nil {
@@ -191,8 +174,6 @@ func HasChanged(ctx context.Context, client *db.ChromaClient, repo, filePath str
 		}
 		return true, hash, nil
 	}
-
-	// 2. MTIME check — sizes match; verify content via hash.
 	if mtime != meta.MTime {
 		hash, err := HashFile(filePath, size, mtime, cache)
 		if err != nil {
@@ -203,15 +184,12 @@ func HasChanged(ctx context.Context, client *db.ChromaClient, repo, filePath str
 		}
 		return false, hash, nil
 	}
-
-	// 3. Size and mtime both match — trust the file is unchanged.
 	return false, meta.Hash, nil
 }
 
 const indexWorkers = 8
 
-// processFile runs the full detect → deduplicate → chunk → store pipeline for one file.
-// It returns a per-file IndexStats which the caller merges into the aggregate.
+// processFile runs detect → deduplicate → chunk → store for one file.
 func processFile(ctx context.Context, cfg IndexerConfig, path string, info os.FileInfo,
 	cache *hashCache, seenHashes *sync.Map) (ls IndexStats) {
 
@@ -221,18 +199,14 @@ func processFile(ctx context.Context, cfg IndexerConfig, path string, info os.Fi
 		ls.Errors++
 		return
 	}
-
 	if !changed {
 		ls.FilesUnchanged++
 		return
 	}
-
-	// Global deduplication — skip if another repo already indexed identical content.
 	if _, loaded := seenHashes.LoadOrStore(hash, true); loaded {
 		ls.FilesDedupSkip++
 		return
 	}
-
 	ls.FilesChanged++
 
 	content, err := os.ReadFile(path)
@@ -249,7 +223,6 @@ func processFile(ctx context.Context, cfg IndexerConfig, path string, info os.Fi
 		ls.Errors++
 		return
 	}
-
 	if err := cfg.DB.DeleteFileChunks(ctx, cfg.RepoName, path); err != nil {
 		log.Printf("[indexer] delete old chunks %s: %v", path, err)
 		ls.Errors++
@@ -267,16 +240,26 @@ func processFile(ctx context.Context, cfg IndexerConfig, path string, info os.Fi
 		ls.Errors++
 		return
 	}
-
 	ls.ChunksUpserted = len(chunks)
 	return
 }
 
-// RunIndex walks the repository at cfg.RootPath, detects changed files, chunks them, and stores
-// them in ChromaDB. Worker goroutines process files concurrently via a buffered channel.
-// Returns aggregate IndexStats for the entire run.
+// RunIndex walks/lists cfg.RootPath, detects changes, chunks, and stores.
+// For git repos it uses git ls-files and commit-based incremental indexing.
 func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
-	stats := &IndexStats{}
+	startTime := time.Now()
+
+	if cfg.SkipDirs == nil {
+		cfg.SkipDirs = config.DefaultSkipDirsMap
+	}
+	if cfg.SkipExtensions == nil {
+		cfg.SkipExtensions = config.DefaultSkipExtensionsMap
+	}
+	if cfg.SkipFilenames == nil {
+		cfg.SkipFilenames = config.DefaultSkipFilenamesMap
+	}
+
+	stats := &IndexStats{IndexMode: "full"}
 	cache := newHashCache()
 
 	seenHashes := cfg.SeenHashes
@@ -284,15 +267,13 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 		seenHashes = &sync.Map{}
 	}
 
-	// Load .gitignore from the repo root if present.
-	var gi *gitignore.GitIgnore
-	giPath := filepath.Join(cfg.RootPath, ".gitignore")
-	if _, err := os.Stat(giPath); err == nil {
-		if compiled, err := gitignore.CompileIgnoreFile(giPath); err == nil {
-			gi = compiled
-		} else {
-			log.Printf("[indexer] could not parse .gitignore at %s: %v", giPath, err)
-		}
+	isGitRepo := git.IsGitRepo(cfg.RootPath)
+	var headCommit string
+	var fileList []string // nil → WalkDir fallback
+
+	if isGitRepo {
+		headCommit = detectBranchAndCommit(ctx, cfg, stats)
+		fileList, stats.IndexMode = buildFileList(ctx, cfg, stats, headCommit)
 	}
 
 	type workItem struct {
@@ -322,40 +303,162 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 		}()
 	}
 
-	walkErr := filepath.WalkDir(cfg.RootPath, func(path string, d os.DirEntry, walkEntryErr error) error {
-		if walkEntryErr != nil {
-			log.Printf("[indexer] walk error at %s: %v", path, walkEntryErr)
-			mu.Lock()
-			stats.Errors++
-			mu.Unlock()
-			return nil // skip unreadable entry, continue walk
-		}
-		if d.IsDir() {
-			if ShouldSkipDir(d.Name()) {
-				return filepath.SkipDir
+	var feedErr error
+
+	if fileList != nil {
+		for _, path := range fileList {
+			if shouldSkipFile(path, cfg.RootPath, cfg.SkipExtensions, cfg.SkipFilenames, nil) {
+				continue
 			}
-			return nil
+			info, err := os.Stat(path)
+			if err != nil {
+				log.Printf("[indexer] stat %s: %v", path, err)
+				mu.Lock()
+				stats.Errors++
+				mu.Unlock()
+				continue
+			}
+			workCh <- workItem{path: path, info: info}
 		}
-		if shouldSkipFile(path, cfg.RootPath, gi) {
-			return nil
+	} else {
+		var gi *gitignore.GitIgnore
+		giPath := filepath.Join(cfg.RootPath, ".gitignore")
+		if _, err := os.Stat(giPath); err == nil {
+			if compiled, err := gitignore.CompileIgnoreFile(giPath); err == nil {
+				gi = compiled
+			} else {
+				log.Printf("[indexer] could not parse .gitignore at %s: %v", giPath, err)
+			}
 		}
-		info, err := d.Info()
-		if err != nil {
-			log.Printf("[indexer] stat %s: %v", path, err)
-			mu.Lock()
-			stats.Errors++
-			mu.Unlock()
+		feedErr = filepath.WalkDir(cfg.RootPath, func(path string, d os.DirEntry, walkEntryErr error) error {
+			if walkEntryErr != nil {
+				log.Printf("[indexer] walk error at %s: %v", path, walkEntryErr)
+				mu.Lock()
+				stats.Errors++
+				mu.Unlock()
+				return nil
+			}
+			if d.IsDir() {
+				if cfg.SkipDirs[d.Name()] {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if shouldSkipFile(path, cfg.RootPath, cfg.SkipExtensions, cfg.SkipFilenames, gi) {
+				return nil
+			}
+			info, err := d.Info()
+			if err != nil {
+				log.Printf("[indexer] stat %s: %v", path, err)
+				mu.Lock()
+				stats.Errors++
+				mu.Unlock()
+				return nil
+			}
+			workCh <- workItem{path: path, info: info}
 			return nil
-		}
-		workCh <- workItem{path: path, info: info}
-		return nil
-	})
+		})
+	}
 
 	close(workCh)
 	wg.Wait()
 
-	if walkErr != nil {
-		return stats, fmt.Errorf("directory walk failed: %w", walkErr)
+	if feedErr != nil {
+		return stats, fmt.Errorf("directory walk failed: %w", feedErr)
 	}
+
+	if cfg.DB != nil {
+		repoMeta := db.RepoMeta{
+			Repo:              cfg.RepoName,
+			RootPath:          cfg.RootPath,
+			CurrentBranch:     stats.Branch,
+			LastIndexedCommit: headCommit,
+			LastIndexedAt:     time.Now().Format(time.RFC3339),
+			FileCount:         int64(stats.FilesScanned),
+			ChunkCount:        int64(stats.ChunksUpserted),
+			IndexMode:         stats.IndexMode,
+			DurationMs:        time.Since(startTime).Milliseconds(),
+		}
+		if err := cfg.DB.UpsertRepoMeta(ctx, repoMeta); err != nil {
+			log.Printf("[indexer] upsert repo meta: %v", err)
+		}
+	}
+
+	stats.LastCommit = headCommit
 	return stats, nil
+}
+
+// detectBranchAndCommit performs branch-mismatch detection and returns HEAD SHA.
+func detectBranchAndCommit(_ context.Context, cfg IndexerConfig, stats *IndexStats) string {
+	if !cfg.SkipBranchCheck {
+		detected, err := git.DetectDefaultBranch(cfg.RootPath)
+		if err != nil {
+			log.Printf("[indexer] WARNING: could not detect default branch for %s: %v", cfg.RepoName, err)
+		} else {
+			current, cerr := git.CurrentBranch(cfg.RootPath)
+			if cerr == nil {
+				stats.Branch = current
+				expected := cfg.Branch
+				if expected == "" {
+					expected = detected
+				}
+				if current != expected {
+					msg := fmt.Sprintf("[indexer] WARNING: repo %s is on branch %s, expected %s",
+						cfg.RepoName, current, expected)
+					if cfg.StrictBranch {
+						log.Fatal(msg)
+					}
+					log.Print(msg)
+				}
+			}
+		}
+	} else {
+		if current, err := git.CurrentBranch(cfg.RootPath); err == nil {
+			stats.Branch = current
+		}
+	}
+
+	commit, err := git.HeadCommit(cfg.RootPath)
+	if err != nil {
+		log.Printf("[indexer] WARNING: could not get HEAD commit for %s: %v", cfg.RepoName, err)
+		return ""
+	}
+	return commit
+}
+
+// buildFileList decides between incremental (git diff) and full (git ls-files).
+// Returns nil, "full" to signal a WalkDir fallback.
+func buildFileList(_ context.Context, cfg IndexerConfig, stats *IndexStats, headCommit string) ([]string, string) {
+	if headCommit == "" {
+		return nil, "full"
+	}
+	if cfg.DB != nil {
+		meta, err := cfg.DB.GetRepoMeta(context.Background(), cfg.RepoName)
+		if err == nil && meta != nil &&
+			meta.LastIndexedCommit != "" && meta.LastIndexedCommit != headCommit {
+			changed, deleted, err := git.DiffFiles(cfg.RootPath, meta.LastIndexedCommit, headCommit)
+			if err != nil {
+				log.Printf("[indexer] git diff failed for %s, doing full scan: %v", cfg.RepoName, err)
+			} else {
+				for _, dp := range deleted {
+					if err := cfg.DB.DeleteFileChunks(context.Background(), cfg.RepoName, dp); err != nil {
+						log.Printf("[indexer] delete chunks %s: %v", dp, err)
+					}
+					if err := cfg.DB.DeleteFileMeta(context.Background(), cfg.RepoName, dp); err != nil {
+						log.Printf("[indexer] delete meta %s: %v", dp, err)
+					}
+					stats.DeletedFiles++
+				}
+				log.Printf("[indexer] incremental: %d changed, %d deleted since %s",
+					len(changed), len(deleted), meta.LastIndexedCommit[:8])
+				return changed, "incremental"
+			}
+		}
+	}
+	files, err := git.ListFiles(cfg.RootPath)
+	if err != nil {
+		log.Printf("[indexer] git ls-files failed for %s, falling back to fs walk: %v", cfg.RepoName, err)
+		return nil, "full"
+	}
+	return files, "full"
 }

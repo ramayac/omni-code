@@ -1,10 +1,16 @@
 package indexer
 
 import (
+	"context"
+	"github.com/ramayac/omni-code/internal/chunker"
+	"github.com/ramayac/omni-code/internal/db"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/ramayac/omni-code/internal/config"
 )
 
 // ---- ShouldSkipDir ----
@@ -74,7 +80,7 @@ func TestShouldSkipFile_Extensions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
-			if got := shouldSkipFile(tc.path, "/repo", nil); got != tc.want {
+			if got := shouldSkipFile(tc.path, "/repo", config.DefaultSkipExtensionsMap, config.DefaultSkipFilenamesMap, nil); got != tc.want {
 				t.Errorf("shouldSkipFile(%q) = %v, want %v", tc.path, got, tc.want)
 			}
 		})
@@ -100,7 +106,7 @@ func TestShouldSkipFile_Filenames(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(filepath.Base(tc.path), func(t *testing.T) {
-			if got := shouldSkipFile(tc.path, "/repo", nil); got != tc.want {
+			if got := shouldSkipFile(tc.path, "/repo", config.DefaultSkipExtensionsMap, config.DefaultSkipFilenamesMap, nil); got != tc.want {
 				t.Errorf("shouldSkipFile(%q) = %v, want %v", tc.path, got, tc.want)
 			}
 		})
@@ -198,30 +204,104 @@ func TestDeduplication(t *testing.T) {
 	hash := "deadbeef1234"
 
 	// First store: not loaded.
-	_, loaded := seenHashes.LoadOrStore(hash, true)
-	if loaded {
+	if _, loaded := seenHashes.LoadOrStore(hash, true); loaded {
 		t.Error("first LoadOrStore should not find an existing entry")
 	}
 
 	// Second store: loaded (duplicate).
-	_, loaded = seenHashes.LoadOrStore(hash, true)
-	if !loaded {
+	if _, loaded := seenHashes.LoadOrStore(hash, true); !loaded {
 		t.Error("second LoadOrStore should find the existing entry")
 	}
 
 	// Different hash is a new entry.
-	_, loaded = seenHashes.LoadOrStore("otherhash", true)
-	if loaded {
+	if _, loaded := seenHashes.LoadOrStore("otherhash", true); loaded {
 		t.Error("distinct hash should not be found in seenHashes")
 	}
 }
 
 // ---- Integration: RunIndex ----
-// Requires CHROMA_URL to be set. Skipped in normal unit-test runs.
 
 func TestRunIndex_Integration(t *testing.T) {
+	// Requires CHROMA_URL to be set. Skipped in normal unit-test runs.
 	if os.Getenv("CHROMA_URL") == "" {
 		t.Skip("CHROMA_URL not set; skipping RunIndex integration test")
 	}
 	t.Log("RunIndex integration test placeholder — wire up in Phase 4")
+}
+
+func TestRunIndex_GitIncremental(t *testing.T) {
+	if os.Getenv("CHROMA_URL") == "" {
+		t.Skip("CHROMA_URL not set; skipping integration test")
+	}
+	ctx := context.Background()
+	client, err := db.NewChromaClient(ctx, os.Getenv("CHROMA_URL"))
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+	repoDir := t.TempDir()
+
+	// Create git repo
+	cmd := exec.Command("git", "init", "-b", "main")
+	cmd.Dir = repoDir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+
+	os.WriteFile(filepath.Join(repoDir, "file1.txt"), []byte("v1"), 0644)
+
+	cmd = exec.Command("git", "add", ".")
+	cmd.Dir = repoDir
+	cmd.Run()
+
+	cmd = exec.Command("git", "commit", "-m", "init")
+	cmd.Dir = repoDir
+	cmd.Run()
+	cfg := IndexerConfig{
+		RootPath:       repoDir,
+		RepoName:       "test-incremental-repo",
+		DB:             client,
+		ChunkFn:        chunker.ChunkFile,
+		SeenHashes:     &sync.Map{},
+		SkipDirs:       config.DefaultSkipDirsMap,
+		SkipExtensions: config.DefaultSkipExtensionsMap,
+		SkipFilenames:  config.DefaultSkipFilenamesMap,
+	}
+	// First pass
+	stats1, err := RunIndex(ctx, cfg)
+	if err != nil {
+		t.Fatalf("run index pass 1: %v", err)
+	}
+	if stats1.FilesScanned != 1 {
+		t.Errorf("expected 1 file processed, got %d", stats1.FilesScanned)
+	}
+	// Edit file
+	os.WriteFile(filepath.Join(repoDir, "file1.txt"), []byte("v2 long text to be at least some bytes long"), 0644)
+	cmd = exec.Command("git", "add", ".")
+	cmd.Dir = repoDir
+	cmd.Run()
+	cmd = exec.Command("git", "commit", "-m", "update")
+	cmd.Dir = repoDir
+	cmd.Run()
+	// Second pass
+	cfg.SeenHashes = &sync.Map{} // reset dedup cache
+	stats2, err := RunIndex(ctx, cfg)
+	if err != nil {
+		t.Fatalf("run index pass 2: %v", err)
+	}
+	if stats2.FilesScanned != 1 {
+		t.Errorf("expected 1 file processed, got %d", stats2.FilesScanned)
+	}
+	if stats2.FilesChanged != 1 {
+		t.Errorf("expected 1 file changed, got %d", stats2.FilesChanged)
+	}
+	// Third pass (no changes)
+	cfg.SeenHashes = &sync.Map{}
+	stats3, err := RunIndex(ctx, cfg)
+	if err != nil {
+		t.Fatalf("run index pass 3: %v", err)
+	}
+	// It's checked, but skipped and should say 0 changed files
+	if stats3.FilesChanged != 0 {
+		t.Errorf("expected 0 files changed on third pass, got %d", stats3.FilesChanged)
+	}
 }

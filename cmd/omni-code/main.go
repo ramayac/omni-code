@@ -7,11 +7,20 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"text/tabwriter"
+	"time"
 
 	defaultef "github.com/amikos-tech/chroma-go/pkg/embeddings/default_ef"
 
 	"github.com/ramayac/omni-code/internal/chunker"
+	"github.com/ramayac/omni-code/internal/config"
 	"github.com/ramayac/omni-code/internal/db"
+	"github.com/ramayac/omni-code/internal/embedder"
+	"github.com/ramayac/omni-code/internal/git"
 	"github.com/ramayac/omni-code/internal/indexer"
 	internalmcp "github.com/ramayac/omni-code/internal/mcp"
 )
@@ -32,6 +41,12 @@ func main() {
 		runSearch(os.Args[2:])
 	case "mcp":
 		runMCP(os.Args[2:])
+	case "repos":
+		runRepos(os.Args[2:])
+	case "reset":
+		runReset(os.Args[2:])
+	case "watch":
+		runWatch(os.Args[2:])
 	case "--help", "-h", "help":
 		printUsage()
 	default:
@@ -48,15 +63,17 @@ Usage:
   omni-code <command> [flags]
 
 Commands:
-  index   Scan and index a repository into ChromaDB
+  index   Scan and index repositories into ChromaDB
   search  Query indexed code from the terminal
   mcp     Start the MCP stdio server for Copilot
+  repos   Manage the repository registry (list / add / remove)
+  reset   Drop indexed data (--all or --repo <name>)
+  watch   Poll for git HEAD changes and re-index automatically
 
 Run 'omni-code <command> --help' for command-specific flags.
 `)
 }
 
-// applyLogFlags adjusts the global logger based on --verbose / --quiet flags.
 func applyLogFlags(verbose, quiet bool) {
 	if quiet {
 		log.SetOutput(io.Discard)
@@ -67,30 +84,68 @@ func applyLogFlags(verbose, quiet bool) {
 	}
 }
 
-// newClientAndCollections creates a ChromaClient and ensures collections exist.
-func newClientAndCollections(ctx context.Context, baseURL string) (*db.ChromaClient, error) {
+// newClientAndCollections creates a ChromaClient and ensures all collections exist.
+// If embBackend is non-empty and not "chroma-default", an external embedder is wired in.
+func newClientAndCollections(ctx context.Context, baseURL, embBackend, embModel, embURL string) (*db.ChromaClient, error) {
 	client, err := db.NewChromaClient(ctx, baseURL)
 	if err != nil {
 		return nil, err
 	}
-	ef, _, err := defaultef.NewDefaultEmbeddingFunction()
-	if err != nil {
-		return nil, fmt.Errorf("create embedding function: %w", err)
-	}
-	if err := client.EnsureCollections(ctx, ef); err != nil {
-		return nil, fmt.Errorf("ensure collections: %w", err)
+
+	switch embBackend {
+	case "", "chroma-default":
+		ef, _, err := defaultef.NewDefaultEmbeddingFunction()
+		if err != nil {
+			return nil, fmt.Errorf("create default embedding function: %w", err)
+		}
+		if err := client.EnsureCollections(ctx, ef); err != nil {
+			return nil, fmt.Errorf("ensure collections: %w", err)
+		}
+	default:
+		apiKey := os.Getenv("OPENAI_API_KEY")
+		if apiKey == "" {
+			apiKey = os.Getenv("EMBEDDING_API_KEY")
+		}
+		ext, err := embedder.NewEmbedder(embBackend, embModel, embURL, apiKey)
+		if err != nil {
+			return nil, fmt.Errorf("create embedder: %w", err)
+		}
+		if err := client.EnsureCollections(ctx, nil); err != nil {
+			return nil, fmt.Errorf("ensure collections: %w", err)
+		}
+		client.SetEmbedder(ext)
 	}
 	return client, nil
 }
 
+func printIndexStats(stats *indexer.IndexStats) {
+	fmt.Fprintf(os.Stderr, "\n[index] complete (%s):\n", stats.IndexMode)
+	fmt.Fprintf(os.Stderr, "  branch:          %s\n", stats.Branch)
+	fmt.Fprintf(os.Stderr, "  commit:          %s\n", stats.LastCommit)
+	fmt.Fprintf(os.Stderr, "  files scanned:   %d\n", stats.FilesScanned)
+	fmt.Fprintf(os.Stderr, "  files changed:   %d\n", stats.FilesChanged)
+	fmt.Fprintf(os.Stderr, "  files unchanged: %d\n", stats.FilesUnchanged)
+	fmt.Fprintf(os.Stderr, "  files deleted:   %d\n", stats.DeletedFiles)
+	fmt.Fprintf(os.Stderr, "  dedup skipped:   %d\n", stats.FilesDedupSkip)
+	fmt.Fprintf(os.Stderr, "  chunks upserted: %d\n", stats.ChunksUpserted)
+	fmt.Fprintf(os.Stderr, "  errors:          %d\n", stats.Errors)
+}
+
 func runIndex(args []string) {
 	fs := flag.NewFlagSet("index", flag.ExitOnError)
-	name := fs.String("name", "", "repository name (required)")
+	name := fs.String("name", "", "repository name (single-repo mode)")
 	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
+	cfgPath := fs.String("config", "", "path to repos.yaml config file")
+	repoFilter := fs.String("repo", "", "index only this repo name from the config")
+	parallel := fs.Bool("parallel", false, "index multiple repos in parallel (config mode)")
+	strictBranch := fs.Bool("strict-branch", false, "fatal if repo is on wrong branch")
+	embBackend := fs.String("embedding-backend", "", "embedding backend: chroma-default, ollama, openai, openai-compatible")
+	embModel := fs.String("embedding-model", "", "embedding model name")
+	embURL := fs.String("embedding-url", "", "embedding service base URL")
 	verbose := fs.Bool("verbose", false, "enable verbose logging")
 	quiet := fs.Bool("quiet", false, "suppress all log output")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: omni-code index --name <repo-name> [--db <url>] [--verbose] [--quiet] <path>\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, "Usage: omni-code index [--config repos.yaml] [--name <name>] [--db <url>] [flags] [path]\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -98,8 +153,69 @@ func runIndex(args []string) {
 	}
 	applyLogFlags(*verbose, *quiet)
 
+	ctx := context.Background()
+	log.Printf("[index] connecting to ChromaDB at %s", *dbURL)
+	client, err := newClientAndCollections(ctx, *dbURL, *embBackend, *embModel, *embURL)
+	if err != nil {
+		log.Fatalf("[index] %v", err)
+	}
+
+	if *cfgPath != "" {
+		cfg, err := config.Load(*cfgPath)
+		if err != nil {
+			log.Fatalf("[index] load config: %v", err)
+		}
+
+		sharedHashes := &sync.Map{}
+		runOne := func(repo config.RepoEntry) {
+			dirs, exts, names := config.ResolveSkipLists(*cfg, repo)
+			idxCfg := indexer.IndexerConfig{
+				RootPath:        repo.Path,
+				RepoName:        repo.Name,
+				DB:              client,
+				ChunkFn:         chunker.ChunkFile,
+				SeenHashes:      sharedHashes,
+				SkipDirs:        dirs,
+				SkipExtensions:  exts,
+				SkipFilenames:   names,
+				Branch:          repo.Branch,
+				StrictBranch:    *strictBranch,
+				SkipBranchCheck: repo.SkipBranchCheck,
+			}
+			log.Printf("[index] starting repo %q at %s", repo.Name, repo.Path)
+			stats, err := indexer.RunIndex(ctx, idxCfg)
+			if err != nil {
+				log.Printf("[index] repo %s: %v", repo.Name, err)
+				return
+			}
+			printIndexStats(stats)
+		}
+
+		if *parallel {
+			var wg sync.WaitGroup
+			for _, repo := range cfg.Repos {
+				if *repoFilter != "" && repo.Name != *repoFilter {
+					continue
+				}
+				wg.Add(1)
+				r := repo
+				go func() { defer wg.Done(); runOne(r) }()
+			}
+			wg.Wait()
+		} else {
+			for _, repo := range cfg.Repos {
+				if *repoFilter != "" && repo.Name != *repoFilter {
+					continue
+				}
+				runOne(repo)
+			}
+		}
+		return
+	}
+
+	// Single-repo mode.
 	if *name == "" {
-		fmt.Fprintln(os.Stderr, "error: --name is required")
+		fmt.Fprintln(os.Stderr, "error: --name is required (or use --config)")
 		fs.Usage()
 		os.Exit(1)
 	}
@@ -110,18 +226,12 @@ func runIndex(args []string) {
 	}
 	repoPath := fs.Arg(0)
 
-	ctx := context.Background()
-	log.Printf("[index] connecting to ChromaDB at %s", *dbURL)
-	client, err := newClientAndCollections(ctx, *dbURL)
-	if err != nil {
-		log.Fatalf("[index] %v", err)
-	}
-
 	cfg := indexer.IndexerConfig{
-		RootPath: repoPath,
-		RepoName: *name,
-		DB:       client,
-		ChunkFn:  chunker.ChunkFile,
+		RootPath:     repoPath,
+		RepoName:     *name,
+		DB:           client,
+		ChunkFn:      chunker.ChunkFile,
+		StrictBranch: *strictBranch,
 	}
 
 	log.Printf("[index] starting index of %q (repo=%s)", repoPath, *name)
@@ -129,26 +239,25 @@ func runIndex(args []string) {
 	if err != nil {
 		log.Fatalf("[index] %v", err)
 	}
-
-	fmt.Fprintf(os.Stderr, "\n[index] complete:\n")
-	fmt.Fprintf(os.Stderr, "  files scanned:   %d\n", stats.FilesScanned)
-	fmt.Fprintf(os.Stderr, "  files changed:   %d\n", stats.FilesChanged)
-	fmt.Fprintf(os.Stderr, "  files unchanged: %d\n", stats.FilesUnchanged)
-	fmt.Fprintf(os.Stderr, "  dedup skipped:   %d\n", stats.FilesDedupSkip)
-	fmt.Fprintf(os.Stderr, "  chunks upserted: %d\n", stats.ChunksUpserted)
-	fmt.Fprintf(os.Stderr, "  errors:          %d\n", stats.Errors)
+	printIndexStats(stats)
 }
 
 func runSearch(args []string) {
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
 	query := fs.String("query", "", "search query (required)")
-	repo := fs.String("repo", "", "filter results to a specific repository (optional)")
+	repo := fs.String("repo", "", "filter by repository name")
 	n := fs.Int("n", 10, "number of results to return")
+	lang := fs.String("lang", "", "filter by language (e.g. go, python)")
+	ext := fs.String("ext", "", "filter by extensions, comma-separated (e.g. .go,.ts)")
+	minScore := fs.Float64("min-score", 0, "minimum similarity score 0–1")
+	dedup := fs.Bool("dedup", false, "keep only the top chunk per file")
+	contextLines := fs.Int("context-lines", 0, "expand results by N lines above/below")
+	hybrid := fs.Bool("hybrid", false, "enable BM25+vector hybrid re-ranking")
 	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
 	verbose := fs.Bool("verbose", false, "enable verbose logging")
 	quiet := fs.Bool("quiet", false, "suppress all log output")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: omni-code search --query <text> [--repo <name>] [--n <count>] [--db <url>] [--verbose] [--quiet]\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, "Usage: omni-code search --query <text> [flags]\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -163,12 +272,33 @@ func runSearch(args []string) {
 	}
 
 	ctx := context.Background()
-	client, err := newClientAndCollections(ctx, *dbURL)
+	client, err := newClientAndCollections(ctx, *dbURL, "", "", "")
 	if err != nil {
 		log.Fatalf("[search] %v", err)
 	}
 
-	results, err := client.QueryChunks(ctx, *query, *n, *repo)
+	var extFilters []string
+	if *ext != "" {
+		for _, e := range strings.Split(*ext, ",") {
+			e = strings.TrimSpace(e)
+			if e != "" {
+				extFilters = append(extFilters, e)
+			}
+		}
+	}
+
+	opts := db.QueryOpts{
+		NResults:     *n,
+		RepoFilter:   *repo,
+		LangFilter:   *lang,
+		ExtFilters:   extFilters,
+		MinScore:     float32(*minScore),
+		Dedup:        *dedup,
+		ContextLines: *contextLines,
+		Hybrid:       *hybrid,
+	}
+
+	results, err := client.QueryChunks(ctx, *query, opts)
 	if err != nil {
 		log.Fatalf("[search] query failed: %v", err)
 	}
@@ -199,7 +329,7 @@ func runMCP(args []string) {
 	applyLogFlags(*verbose, *quiet)
 
 	ctx := context.Background()
-	client, err := newClientAndCollections(ctx, *dbURL)
+	client, err := newClientAndCollections(ctx, *dbURL, "", "", "")
 	if err != nil {
 		log.Fatalf("[mcp] %v", err)
 	}
@@ -207,4 +337,320 @@ func runMCP(args []string) {
 	if err := internalmcp.ServeStdio(ctx, client); err != nil {
 		log.Fatalf("[mcp] server error: %v", err)
 	}
+}
+
+// runRepos dispatches repos sub-subcommands.
+func runRepos(args []string) {
+	if len(args) == 0 || args[0] == "list" {
+		reposList(args)
+		return
+	}
+	switch args[0] {
+	case "add":
+		reposAdd(args[1:])
+	case "remove":
+		reposRemove(args[1:])
+	default:
+		reposList(args)
+	}
+}
+
+func reposList(args []string) {
+	fs := flag.NewFlagSet("repos list", flag.ExitOnError)
+	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+	client, err := newClientAndCollections(ctx, *dbURL, "", "", "")
+	if err != nil {
+		log.Fatalf("[repos] %v", err)
+	}
+
+	metas, err := client.ListRepoMeta(ctx)
+	if err != nil {
+		log.Fatalf("[repos] list: %v", err)
+	}
+
+	if len(metas) == 0 {
+		fmt.Fprintln(os.Stderr, "no repos indexed yet")
+		return
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "REPO\tBRANCH\tLAST COMMIT\tLAST INDEXED\tFILES\tCHUNKS")
+	for _, m := range metas {
+		commit := m.LastIndexedCommit
+		if len(commit) > 8 {
+			commit = commit[:8]
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%d\n",
+			m.Repo, m.CurrentBranch, commit, m.LastIndexedAt, m.FileCount, m.ChunkCount)
+	}
+	w.Flush()
+}
+
+func reposAdd(args []string) {
+	fs := flag.NewFlagSet("repos add", flag.ExitOnError)
+	name := fs.String("name", "", "repository name (required)")
+	path := fs.String("path", "", "filesystem path (required)")
+	branch := fs.String("branch", "", "expected branch (optional)")
+	cfgPath := fs.String("config", "repos.yaml", "path to repos.yaml")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: omni-code repos add --name <name> --path <path> [--branch <branch>] [--config repos.yaml]\n")
+	}
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+	if *name == "" || *path == "" {
+		fmt.Fprintln(os.Stderr, "error: --name and --path are required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	var cfg config.Config
+	if existing, err := config.Load(*cfgPath); err == nil {
+		cfg = *existing
+	}
+	for _, r := range cfg.Repos {
+		if r.Name == *name {
+			fmt.Fprintf(os.Stderr, "error: repo %q already exists in %s\n", *name, *cfgPath)
+			os.Exit(1)
+		}
+	}
+	cfg.Repos = append(cfg.Repos, config.RepoEntry{
+		Name:   *name,
+		Path:   *path,
+		Branch: *branch,
+	})
+	if err := config.Save(&cfg, *cfgPath); err != nil {
+		log.Fatalf("[repos add] %v", err)
+	}
+	fmt.Printf("added repo %q to %s\n", *name, *cfgPath)
+}
+
+func reposRemove(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: omni-code repos remove <name> [--config repos.yaml] [--db <url>]")
+		os.Exit(1)
+	}
+	name := args[0]
+
+	fs := flag.NewFlagSet("repos remove", flag.ExitOnError)
+	cfgPath := fs.String("config", "repos.yaml", "path to repos.yaml")
+	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
+	if err := fs.Parse(args[1:]); err != nil {
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		log.Fatalf("[repos remove] load config: %v", err)
+	}
+
+	found := false
+	newRepos := cfg.Repos[:0]
+	for _, r := range cfg.Repos {
+		if r.Name == name {
+			found = true
+			continue
+		}
+		newRepos = append(newRepos, r)
+	}
+	if !found {
+		fmt.Fprintf(os.Stderr, "repo %q not found in %s\n", name, *cfgPath)
+		os.Exit(1)
+	}
+	cfg.Repos = newRepos
+	if err := config.Save(cfg, *cfgPath); err != nil {
+		log.Fatalf("[repos remove] save config: %v", err)
+	}
+
+	ctx := context.Background()
+	client, err := newClientAndCollections(ctx, *dbURL, "", "", "")
+	if err != nil {
+		log.Fatalf("[repos remove] db connect: %v", err)
+	}
+	deleteRepo(ctx, client, name)
+	fmt.Printf("removed repo %q from %s and deleted its index data\n", name, *cfgPath)
+}
+
+// runReset handles: reset --all | reset --repo <name>
+func runReset(args []string) {
+	fs := flag.NewFlagSet("reset", flag.ExitOnError)
+	all := fs.Bool("all", false, "drop and recreate all collections")
+	repo := fs.String("repo", "", "delete data for a specific repo")
+	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: omni-code reset --all | omni-code reset --repo <name>\n")
+	}
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+	if !*all && *repo == "" {
+		fmt.Fprintln(os.Stderr, "error: --all or --repo <name> is required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+	client, err := newClientAndCollections(ctx, *dbURL, "", "", "")
+	if err != nil {
+		log.Fatalf("[reset] %v", err)
+	}
+
+	if *all {
+		ef, _, err := defaultef.NewDefaultEmbeddingFunction()
+		if err != nil {
+			log.Fatalf("[reset] create EF: %v", err)
+		}
+		if err := client.ResetAllCollections(ctx, ef); err != nil {
+			log.Fatalf("[reset] %v", err)
+		}
+		fmt.Fprintln(os.Stderr, "[reset] all collections dropped and recreated")
+		return
+	}
+
+	deleteRepo(ctx, client, *repo)
+	fmt.Fprintf(os.Stderr, "[reset] data for repo %q deleted\n", *repo)
+}
+
+// deleteRepo removes all data for a repo from all three collections.
+func deleteRepo(ctx context.Context, client *db.ChromaClient, name string) {
+	if err := client.DeleteRepoChunks(ctx, name); err != nil {
+		log.Printf("[reset] delete chunks for %s: %v", name, err)
+	}
+	if err := client.DeleteRepoFileMeta(ctx, name); err != nil {
+		log.Printf("[reset] delete file metas for %s: %v", name, err)
+	}
+	if err := client.DeleteRepoMeta(ctx, name); err != nil {
+		log.Printf("[reset] delete repo meta for %s: %v", name, err)
+	}
+}
+
+// runWatch handles: watch --config repos.yaml [--interval 5m] [--once] [--install-hook]
+func runWatch(args []string) {
+	fs := flag.NewFlagSet("watch", flag.ExitOnError)
+	cfgPath := fs.String("config", "repos.yaml", "path to repos.yaml")
+	interval := fs.Duration("interval", 5*time.Minute, "polling interval for HEAD changes")
+	once := fs.Bool("once", false, "check once and exit (useful in post-commit hooks)")
+	installHook := fs.Bool("install-hook", false, "install git post-commit hooks for all repos")
+	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
+	embBackend := fs.String("embedding-backend", "", "embedding backend")
+	embModel := fs.String("embedding-model", "", "embedding model name")
+	embURL := fs.String("embedding-url", "", "embedding service URL")
+	verbose := fs.Bool("verbose", false, "enable verbose logging")
+	quiet := fs.Bool("quiet", false, "suppress all log output")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: omni-code watch --config repos.yaml [--interval 5m] [--once] [--install-hook]\n")
+	}
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+	applyLogFlags(*verbose, *quiet)
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		log.Fatalf("[watch] load config: %v", err)
+	}
+
+	if *installHook {
+		installGitHooks(cfg, *cfgPath)
+		return
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	client, err := newClientAndCollections(ctx, *dbURL, *embBackend, *embModel, *embURL)
+	if err != nil {
+		log.Fatalf("[watch] %v", err)
+	}
+
+	checkAndReindex := func() {
+		for _, repo := range cfg.Repos {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			if !git.IsGitRepo(repo.Path) {
+				continue
+			}
+			current, err := git.HeadCommit(repo.Path)
+			if err != nil {
+				log.Printf("[watch] HEAD commit for %s: %v", repo.Name, err)
+				continue
+			}
+			meta, err := client.GetRepoMeta(ctx, repo.Name)
+			if err != nil || meta == nil || meta.LastIndexedCommit == current {
+				continue
+			}
+			log.Printf("[watch] repo %s changed (%s..%s), re-indexing",
+				repo.Name, meta.LastIndexedCommit[:min(8, len(meta.LastIndexedCommit))], current[:min(8, len(current))])
+			dirs, exts, names := config.ResolveSkipLists(*cfg, repo)
+			idxCfg := indexer.IndexerConfig{
+				RootPath:        repo.Path,
+				RepoName:        repo.Name,
+				DB:              client,
+				ChunkFn:         chunker.ChunkFile,
+				SkipDirs:        dirs,
+				SkipExtensions:  exts,
+				SkipFilenames:   names,
+				Branch:          repo.Branch,
+				SkipBranchCheck: repo.SkipBranchCheck,
+			}
+			stats, err := indexer.RunIndex(ctx, idxCfg)
+			if err != nil {
+				log.Printf("[watch] index %s: %v", repo.Name, err)
+				continue
+			}
+			log.Printf("[watch] %s: %d changed, %d chunks", repo.Name, stats.FilesChanged, stats.ChunksUpserted)
+		}
+	}
+
+	if *once {
+		checkAndReindex()
+		return
+	}
+
+	ticker := time.NewTicker(*interval)
+	defer ticker.Stop()
+	log.Printf("[watch] polling every %s (Ctrl-C to stop)", *interval)
+	checkAndReindex()
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("[watch] shutting down")
+			return
+		case <-ticker.C:
+			checkAndReindex()
+		}
+	}
+}
+
+func installGitHooks(cfg *config.Config, cfgAbsPath string) {
+	for _, repo := range cfg.Repos {
+		hookDir := repo.Path + "/.git/hooks"
+		hookFile := hookDir + "/post-commit"
+		if _, err := os.Stat(hookDir); err != nil {
+			log.Printf("[hook] %s: .git/hooks not found, skipping", repo.Name)
+			continue
+		}
+		script := fmt.Sprintf("#!/bin/sh\nomni-code watch --config %s --once 2>/dev/null &\n",
+			cfgAbsPath)
+		if err := os.WriteFile(hookFile, []byte(script), 0o755); err != nil {
+			log.Printf("[hook] write %s: %v", hookFile, err)
+			continue
+		}
+		fmt.Printf("installed post-commit hook for %s at %s\n", repo.Name, hookFile)
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

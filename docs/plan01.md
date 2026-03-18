@@ -43,16 +43,16 @@ The current Makefile is minimal. Add targets for day-to-day operations.
 
 **Tasks:**
 
-- [ ] Add `reset-db` target: call `omni-code reset --all`
-- [ ] Add `reset-repo` target: call `omni-code reset --repo $(REPO)` (error if `REPO` not set)
-- [ ] Add `reindex` target: call `omni-code index --config repos.yaml`
-- [ ] Add `reindex-repo` target: call `omni-code index --config repos.yaml --repo $(REPO)`
-- [ ] Add `backup-db` target: `docker exec chroma-db tar -czf - /chroma/chroma` > `./backups/$(shell date +%Y-%m-%dT%H-%M-%S)/chroma.tar.gz`
-- [ ] Add `restore-db` target: validate `FILE` var set, copy into container
-- [ ] Add `status` target: call `omni-code repos`
-- [ ] Add `stop-db` and `rm-db` targets
-- [ ] Update `.PHONY` to include all new targets
-- [ ] Add a `docker-db-start` alias that is idempotent (starts existing container if stopped, creates if missing)
+- [x] Add `reset-db` target: call `omni-code reset --all`
+- [x] Add `reset-repo` target: call `omni-code reset --repo $(REPO)` (error if `REPO` not set)
+- [x] Add `reindex` target: call `omni-code index --config repos.yaml`
+- [x] Add `reindex-repo` target: call `omni-code index --config repos.yaml --repo $(REPO)`
+- [x] Add `backup-db` target: `docker exec chroma-db tar -czf - /chroma/chroma` > `./backups/$(shell date +%Y-%m-%dT%H-%M-%S)/chroma.tar.gz`
+- [x] Add `restore-db` target: validate `FILE` var set, copy into container
+- [x] Add `status` target: call `omni-code repos`
+- [x] Add `stop-db` and `rm-db` targets
+- [x] Update `.PHONY` to include all new targets
+- [x] Add a `docker-db-start` alias that is idempotent (starts existing container if stopped, creates if missing)
 
 ---
 
@@ -141,22 +141,22 @@ $ omni-code repos add --name <name> --path <path> [--branch <branch>]
 
 **Tasks:**
 
-- [ ] Create `internal/config/` package with `Config` and `RepoEntry` structs
-- [ ] Implement `Load(path string) (*Config, error)` — reads and validates `repos.yaml`
-- [ ] Implement `Save(cfg *Config, path string) error` — writes back (used by `repos add/remove`)
-- [ ] Add `--config` flag to `index` subcommand; when set, iterates all repos in config (serial by default, `--parallel` flag for concurrent)
-- [ ] Add `--repo` flag to `index --config` to target a single named repo from the config
-- [ ] Add `repos` subcommand with `list` (default), `add`, `remove` sub-subcommands
-- [ ] Add `repos list` table output (reads from ChromaDB `repos` metadata collection)
-- [ ] Add `repos add` — appends to `repos.yaml`, creates file if missing
-- [ ] Add `repos remove` — removes from `repos.yaml` AND calls `omni-code reset --repo <name>`
-- [ ] Add `reset` subcommand with `--all` and `--repo <name>` flags (calls `db.DeleteRepo` or `db.ResetAll`)
-- [ ] Move hardcoded skip lists out of `indexer.go` into `internal/config/defaults.go` as exported `Default*` vars
-- [ ] Implement `ResolveSkipLists(global Config, entry RepoEntry) (dirs, exts, filenames map[string]bool)` in config package — applies the 4-level merge/override logic
-- [ ] Pass resolved skip lists into `IndexerConfig` instead of reading package-level vars
-- [ ] Remove the three `var skip*` package-level maps from `indexer.go`; replace with fields on `IndexerConfig`
-- [ ] Write tests for `ResolveSkipLists`: defaults only, global merge, per-repo merge, per-repo override
-- [ ] Write tests for config load/save, validation of required fields (name, path)
+- [x] Create `internal/config/` package with `Config` and `RepoEntry` structs
+- [x] Implement `Load(path string) (*Config, error)` — reads and validates `repos.yaml`
+- [x] Implement `Save(cfg *Config, path string) error` — writes back (used by `repos add/remove`)
+- [x] Add `--config` flag to `index` subcommand; when set, iterates all repos in config (serial by default, `--parallel` flag for concurrent)
+- [x] Add `--repo` flag to `index --config` to target a single named repo from the config
+- [x] Add `repos` subcommand with `list` (default), `add`, `remove` sub-subcommands
+- [x] Add `repos list` table output (reads from ChromaDB `repos` metadata collection)
+- [x] Add `repos add` — appends to `repos.yaml`, creates file if missing
+- [x] Add `repos remove` — removes from `repos.yaml` AND calls `omni-code reset --repo <name>`
+- [x] Add `reset` subcommand with `--all` and `--repo <name>` flags (calls `db.DeleteRepo` or `db.ResetAll`)
+- [x] Move hardcoded skip lists out of `indexer.go` into `internal/config/defaults.go` as exported `Default*` vars
+- [x] Implement `ResolveSkipLists(global Config, entry RepoEntry) (dirs, exts, filenames map[string]bool)` in config package — applies the 4-level merge/override logic
+- [x] Pass resolved skip lists into `IndexerConfig` instead of reading package-level vars
+- [x] Remove the three `var skip*` package-level maps from `indexer.go`; replace with fields on `IndexerConfig`
+- [x] Write tests for `ResolveSkipLists`: defaults only, global merge, per-repo merge, per-repo override
+- [x] Write tests for config load/save, validation of required fields (name, path)
 
 ---
 
@@ -242,23 +242,23 @@ type IndexerConfig struct {
 
 **Tasks:**
 
-- [ ] Create `internal/git/` package
-- [ ] Implement `IsGitRepo(root string) bool` — checks for `.git/` directory or `git rev-parse` success
-- [ ] Implement `DetectDefaultBranch(root string) (string, error)` using the algorithm above
-- [ ] Implement `CurrentBranch(root string) (string, error)`
-- [ ] Implement `HeadCommit(root string) (string, error)`
-- [ ] Implement `ListFiles(root string) ([]string, error)` — wraps `git ls-files`
-- [ ] Implement `DiffFiles(root, from, to string) (changed, deleted []string, error)` — wraps `git diff --name-only`
-- [ ] Integrate `IsGitRepo` check at start of `RunIndex`; route to git path or fs-walk path accordingly
-- [ ] Integrate `DetectDefaultBranch` + `CurrentBranch` into `RunIndex`; emit warning if mismatch
-- [ ] Implement `--strict-branch` flag on `index` subcommand
-- [ ] Replace `filepath.WalkDir` + go-gitignore with `git ls-files` for git repos
-- [ ] Implement commit-hash incremental: load `last_indexed_commit` from repos collection, run diff, process only changed files
-- [ ] On initial index (no stored commit), run full scan then save HEAD commit
-- [ ] For deleted files detected via `git diff --diff-filter=D`: call `db.DeleteFileChunks` and `db.DeleteFileMeta`
-- [ ] Update `IndexStats` to include `deleted_files`, `last_commit`, `branch`, `index_mode` (full/incremental)
-- [ ] Write tests for `DetectDefaultBranch` (mock git output), `DiffFiles`, `IsGitRepo`
-- [ ] Write integration test: index a small test git repo, make a file change, re-index, verify only changed file was processed
+- [x] Create `internal/git/` package
+- [x] Implement `IsGitRepo(root string) bool` — checks for `.git/` directory or `git rev-parse` success
+- [x] Implement `DetectDefaultBranch(root string) (string, error)` using the algorithm above
+- [x] Implement `CurrentBranch(root string) (string, error)`
+- [x] Implement `HeadCommit(root string) (string, error)`
+- [x] Implement `ListFiles(root string) ([]string, error)` — wraps `git ls-files`
+- [x] Implement `DiffFiles(root, from, to string) (changed, deleted []string, error)` — wraps `git diff --name-only`
+- [x] Integrate `IsGitRepo` check at start of `RunIndex`; route to git path or fs-walk path accordingly
+- [x] Integrate `DetectDefaultBranch` + `CurrentBranch` into `RunIndex`; emit warning if mismatch
+- [x] Implement `--strict-branch` flag on `index` subcommand
+- [x] Replace `filepath.WalkDir` + go-gitignore with `git ls-files` for git repos
+- [x] Implement commit-hash incremental: load `last_indexed_commit` from repos collection, run diff, process only changed files
+- [x] On initial index (no stored commit), run full scan then save HEAD commit
+- [x] For deleted files detected via `git diff --diff-filter=D`: call `db.DeleteFileChunks` and `db.DeleteFileMeta`
+- [x] Update `IndexStats` to include `deleted_files`, `last_commit`, `branch`, `index_mode` (full/incremental)
+- [x] Write tests for `DetectDefaultBranch` (mock git output), `DiffFiles`, `IsGitRepo`
+- [x] Write integration test: index a small test git repo, make a file change, re-index, verify only changed file was processed
 
 ---
 
@@ -293,15 +293,15 @@ DeleteAllRepoMeta(ctx) error
 
 **Tasks:**
 
-- [ ] Add `repos` collection to `EnsureCollections`
-- [ ] Define `RepoMeta` struct in `internal/db/`
-- [ ] Implement `UpsertRepoMeta`, `GetRepoMeta`, `ListRepoMeta`, `DeleteRepoMeta`, `DeleteAllRepoMeta`
-- [ ] Call `UpsertRepoMeta` at end of `RunIndex` with final stats
-- [ ] Implement `repos list` subcommand output: tabwriter-formatted table to stdout
-- [ ] Implement `reset --all`: calls `ResetAllCollections` which drops+recreates `files`, `chunks`, `repos`
-- [ ] Implement `reset --repo <name>`: calls `DeleteFileChunks` (all for repo) + `DeleteFileMeta` (all for repo) + `DeleteRepoMeta`
-- [ ] Extend `db.DeleteFileChunks` to accept a repo-wide delete (no specific path filter)
-- [ ] Write tests for `UpsertRepoMeta` / `ListRepoMeta` round-trip (skip if `CHROMA_URL` not set)
+- [x] Add `repos` collection to `EnsureCollections`
+- [x] Define `RepoMeta` struct in `internal/db/`
+- [x] Implement `UpsertRepoMeta`, `GetRepoMeta`, `ListRepoMeta`, `DeleteRepoMeta`, `DeleteAllRepoMeta`
+- [x] Call `UpsertRepoMeta` at end of `RunIndex` with final stats
+- [x] Implement `repos list` subcommand output: tabwriter-formatted table to stdout
+- [x] Implement `reset --all`: calls `ResetAllCollections` which drops+recreates `files`, `chunks`, `repos`
+- [x] Implement `reset --repo <name>`: calls `DeleteFileChunks` (all for repo) + `DeleteFileMeta` (all for repo) + `DeleteRepoMeta`
+- [x] Extend `db.DeleteFileChunks` to accept a repo-wide delete (no specific path filter)
+- [x] Write tests for `UpsertRepoMeta` / `ListRepoMeta` round-trip (skip if `CHROMA_URL` not set)
 
 ---
 
@@ -331,13 +331,13 @@ QueryAllFileMeta(ctx, repo string) ([]FileMeta, error)  // list all files for a 
 
 **Tasks:**
 
-- [ ] Add `QueryAllFileMeta` to `internal/db/chroma.go`
-- [ ] Register `list_repos` tool: calls `db.ListRepoMeta`, formats as markdown table
-- [ ] Register `get_repo_files` tool: calls `db.QueryAllFileMeta`, applies optional glob filter via `path.Match`, returns newline-separated list
-- [ ] Register `get_file_content` tool: resolves absolute path from `RepoMeta.root_path + path`, reads file from disk, returns content with language fence
-- [ ] Add file size guard on `get_file_content`: if file > 100KB, return first 100KB with a truncation notice
-- [ ] Ensure all new tool handlers log to `os.Stderr` only — zero stdout except JSON-RPC
-- [ ] Write tests for each new tool handler (mock db, assert output format)
+- [x] Add `QueryAllFileMeta` to `internal/db/chroma.go`
+- [x] Register `list_repos` tool: calls `db.ListRepoMeta`, formats as markdown table
+- [x] Register `get_repo_files` tool: calls `db.QueryAllFileMeta`, applies optional glob filter via `path.Match`, returns newline-separated list
+- [x] Register `get_file_content` tool: resolves absolute path from `RepoMeta.root_path + path`, reads file from disk, returns content with language fence
+- [x] Add file size guard on `get_file_content`: if file > 100KB, return first 100KB with a truncation notice
+- [x] Ensure all new tool handlers log to `os.Stderr` only — zero stdout except JSON-RPC
+- [x] Write tests for each new tool handler (mock db, assert output format)
 
 ---
 
@@ -378,15 +378,15 @@ omni-code index --config /path/to/repos.yaml --repo <name> --once 2>/dev/null &
 
 **Tasks:**
 
-- [ ] Add `watch` subcommand to CLI
-- [ ] Implement poll loop with configurable interval (use `time.Ticker`)
-- [ ] Implement per-repo HEAD-change check using `HeadCommit` from `internal/git`
-- [ ] Trigger `RunIndex` (incremental) for repos with changed HEAD
-- [ ] Add `--once` flag for single-pass mode (useful in git hooks)
-- [ ] Implement `--install-hook` flag: write `post-commit` hook script to each repo in config
-- [ ] Ensure `watch` handles `SIGINT`/`SIGTERM` gracefully (finish current index, then exit)
-- [ ] Log each check cycle and reindex trigger to `os.Stderr`
-- [ ] Write test for poll loop logic (mock HeadCommit to return changing values)
+- [x] Add `watch` subcommand to CLI
+- [x] Implement poll loop with configurable interval (use `time.Ticker`)
+- [x] Implement per-repo HEAD-change check using `HeadCommit` from `internal/git`
+- [x] Trigger `RunIndex` (incremental) for repos with changed HEAD
+- [x] Add `--once` flag for single-pass mode (useful in git hooks)
+- [x] Implement `--install-hook` flag: write `post-commit` hook script to each repo in config
+- [x] Ensure `watch` handles `SIGINT`/`SIGTERM` gracefully (finish current index, then exit)
+- [x] Log each check cycle and reindex trigger to `os.Stderr`
+- [x] Write test for poll loop logic (mock HeadCommit to return changing values)
 
 ---
 
@@ -423,15 +423,15 @@ func NewEmbedder(backend, model, url, apiKey string) (Embedder, error)
 
 **Tasks:**
 
-- [ ] Create `internal/embedder/` package with `Embedder` interface
-- [ ] Implement `ChromaDefaultEmbedder` (pass nil embedder to chroma-go; let it handle internally)
-- [ ] Implement `OllamaEmbedder`: HTTP POST to Ollama `/api/embeddings`
-- [ ] Implement `OpenAIEmbedder`: HTTP POST to OpenAI `/v1/embeddings` (or compatible URL)
-- [ ] Wire embedder selection into `UpsertChunks` via the ChromaDB collection's embedding function
-- [ ] Add `--embedding-backend`, `--embedding-model`, `--embedding-url` flags to `index` subcommand
-- [ ] Read embedding config from `repos.yaml` as defaults; flags override
-- [ ] Add `OPENAI_API_KEY` and `EMBEDDING_API_KEY` env var lookup (never accept API keys as CLI flags)
-- [ ] Write tests for `OllamaEmbedder` and `OpenAIEmbedder` with a mock HTTP server
+- [x] Create `internal/embedder/` package with `Embedder` interface
+- [x] Implement `ChromaDefaultEmbedder` (pass nil embedder to chroma-go; let it handle internally)
+- [x] Implement `OllamaEmbedder`: HTTP POST to Ollama `/api/embeddings`
+- [x] Implement `OpenAIEmbedder`: HTTP POST to OpenAI `/v1/embeddings` (or compatible URL)
+- [x] Wire embedder selection into `UpsertChunks` via the ChromaDB collection's embedding function
+- [x] Add `--embedding-backend`, `--embedding-model`, `--embedding-url` flags to `index` subcommand
+- [x] Read embedding config from `repos.yaml` as defaults; flags override
+- [x] Add `OPENAI_API_KEY` and `EMBEDDING_API_KEY` env var lookup (never accept API keys as CLI flags)
+- [x] Write tests for `OllamaEmbedder` and `OpenAIEmbedder` with a mock HTTP server
 
 ---
 
@@ -452,15 +452,15 @@ Improve the quality and usability of search results.
 
 **Tasks:**
 
-- [ ] Add `--lang` and `--ext` filter flags to `search` subcommand; pass as ChromaDB `where` metadata filter
-- [ ] Implement result deduplication in `QueryChunks`: if >2 chunks from same file in top-N, keep only highest-score one
-- [ ] Add `--context-lines` flag: after fetching chunk, read file from disk and extend `StartLine`/`EndLine` by N
-- [ ] Add `--min-score` flag: filter `QueryChunks` results below threshold
-- [ ] Expose `--lang`, `--ext`, `--min-score` as optional parameters on `search_codebase` MCP tool
-- [ ] Implement BM25 keyword index over chunk content (in-memory using `github.com/blevesearch/bleve` or a simple TF-IDF) for hybrid search
-- [ ] Implement RRF score fusion: `combined_score = 1/(k + bm25_rank) + 1/(k + vector_rank)` (k=60)
-- [ ] Add `--hybrid` flag to enable BM25+vector hybrid mode (off by default)
-- [ ] Write tests for deduplication logic, score threshold filtering, RRF fusion
+- [x] Add `--lang` and `--ext` filter flags to `search` subcommand; pass as ChromaDB `where` metadata filter
+- [x] Implement result deduplication in `QueryChunks`: if >2 chunks from same file in top-N, keep only highest-score one
+- [x] Add `--context-lines` flag: after fetching chunk, read file from disk and extend `StartLine`/`EndLine` by N
+- [x] Add `--min-score` flag: filter `QueryChunks` results below threshold
+- [x] Expose `--lang`, `--ext`, `--min-score` as optional parameters on `search_codebase` MCP tool
+- [x] Implement BM25 keyword index over chunk content (in-memory using `github.com/blevesearch/bleve` or a simple TF-IDF) for hybrid search
+- [x] Implement RRF score fusion: `combined_score = 1/(k + bm25_rank) + 1/(k + vector_rank)` (k=60)
+- [x] Add `--hybrid` flag to enable BM25+vector hybrid mode (off by default)
+- [x] Write tests for deduplication logic, score threshold filtering, RRF fusion
 
 ---
 
