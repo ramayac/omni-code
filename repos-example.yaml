@@ -1,0 +1,30 @@
+# Example configuration for omni-code
+db: http://localhost:8000
+embedding_backend: chroma-default
+
+# Global skip additions on top of built-in defaults.
+skip_dirs_extra:
+  - ".cache"
+  - ".idea"
+  - ".vscode"
+  - "__MACOSX"
+skip_extensions_extra:
+  - ".lock"
+  - ".sum"
+skip_filenames_extra: []
+
+repos:
+  # Example Go project
+  - name: my-go-project
+    path: /path/to/my-go-project
+    branch: main
+
+  # Example project with branch check disabled
+  - name: legacy-project
+    path: /path/to/legacy-project
+    skip_branch_check: true
+
+  # Example web project
+  - name: frontend-app
+    path: /path/to/frontend-app
+    branch: master

@@ -188,6 +188,7 @@ func (c *ChromaClient) UpsertFileMeta(ctx context.Context, repo, path string, si
 	)
 	err := c.files.Upsert(ctx,
 		chromadb.WithIDs(fileDocID(repo, path)),
+		chromadb.WithTexts(path),
 		chromadb.WithMetadatas(docMeta),
 	)
 	if err != nil {
@@ -335,6 +336,7 @@ func (c *ChromaClient) UpsertRepoMeta(ctx context.Context, meta RepoMeta) error 
 	)
 	err := c.repos.Upsert(ctx,
 		chromadb.WithIDs(chromadb.DocumentID(meta.Repo)),
+		chromadb.WithTexts(meta.Repo),
 		chromadb.WithMetadatas(docMeta),
 	)
 	if err != nil {
