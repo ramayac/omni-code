@@ -1,26 +1,69 @@
 # Example configuration for omni-code
-db: http://localhost:8000
-embedding_backend: chroma-default
+#
+# Runtime precedence is:
+#   defaults -> this file -> environment variables -> CLI flags
+# Environment variable overrides include:
+#   OMNI_DB_URL
+#   OMNI_EMBEDDING_BACKEND (alias: OMNI_EMO_BACKEND)
+#   OMNI_EMBEDDING_MODEL   (alias: OMNI_EMO_MODEL)
+#   OMNI_EMBEDDING_URL     (alias: OMNI_EMO_URL)
 
-# Global skip additions on top of built-in defaults.
-skip_dirs_extra: []
-skip_extensions_extra:
+# ChromaDB base URL used by index/search/mcp/watch/repo commands.
+db: http://localhost:8000
+
+# Embedding backend options: chroma-default, ollama, openai, openai-compatible.
+embedding_backend: chroma-default
+# Optional backend-specific model (for example: nomic-embed-text).
+embedding_model: ""
+# Optional backend URL (for example: http://localhost:11434 for ollama).
+embedding_url: ""
+
+# If true, skip indexing any repo whose current branch does not match expected branch.
+# Repo-level skip_if_wrong_branch is OR-ed with this global value.
+skip_if_wrong_branch: false
+
+# Global skip-list additions merged with built-in defaults.
+# Use these to add extra excludes for every repo.
+skip_dirs_extra: []          # e.g. ["fixtures", "generated"]
+skip_extensions_extra:       # e.g. [".lock", ".sum"]
   - ".lock"
   - ".sum"
-skip_filenames_extra: []
+skip_filenames_extra: []     # e.g. ["CHANGELOG.md"]
 
 repos:
-  # Example Go project
+  # Required fields:
+  # - name: logical repo identifier used in search results and metadata
+  # - path: absolute path to repository root
+  #
+  # Optional fields:
+  # - branch: expected branch (auto-detected default branch when omitted)
+  # - skip_branch_check: suppress wrong-branch warnings for this repo
+  # - skip_if_wrong_branch: skip indexing this repo when branch mismatches
+  # - skip_*_extra: add to merged global+default skip lists for this repo
+  # - skip_*_override: replace merged skip lists entirely for this repo
+
   - name: my-go-project
     path: /path/to/my-go-project
     branch: main
+    skip_branch_check: false
+    skip_if_wrong_branch: false
 
-  # Example project with branch check disabled
+    # Per-repo additions merged with global/default skip lists:
+    skip_dirs_extra: []          # e.g. ["tmp"]
+    skip_extensions_extra: []    # e.g. [".snap"]
+    skip_filenames_extra: []     # e.g. ["pnpm-lock.yaml"]
+
+    # Per-repo full replacements (uncomment to use):
+    # skip_dirs_override: ["only_this_dir"]
+    # skip_extensions_override: [".only_this_ext"]
+    # skip_filenames_override: ["only_this_file"]
+
   - name: legacy-project
     path: /path/to/legacy-project
+    # Disable warning for branch mismatch and skip indexing when mismatched.
     skip_branch_check: true
+    skip_if_wrong_branch: true
 
-  # Example web project
   - name: frontend-app
     path: /path/to/frontend-app
     branch: master
