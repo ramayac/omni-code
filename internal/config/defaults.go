@@ -22,6 +22,7 @@ var DefaultSkipExtensions = []string{
 	".pyc", ".pyo", ".class", ".o", ".obj",
 	".pptx", ".docx", ".xlsx",
 	".keystore", ".jks", ".pepk", ".ico",
+	".eot", ".rdb", ".woff", ".woff2", ".ttf", ".otf",
 }
 
 // DefaultSkipFilenames contains exact filenames skipped by default.
