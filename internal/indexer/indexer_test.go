@@ -84,6 +84,7 @@ func TestShouldSkipFile_Extensions(t *testing.T) {
 		{"/repo/file.dat", true},
 		{"/repo/store.db", true},
 		{"/repo/store.sqlite", true},
+		{"/repo/secret.gpg", true},
 		{"/repo/main.go", false},
 		{"/repo/app.ts", false},
 		{"/repo/app.tsx", false},

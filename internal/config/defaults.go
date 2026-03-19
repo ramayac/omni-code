@@ -26,7 +26,7 @@ var DefaultSkipExtensions = []string{
 	".tvg", ".pbm", ".ppm", ".wav",
 	".pyc", ".pyo", ".class", ".o", ".obj",
 	".pptx", ".docx", ".xlsx",
-	".keystore", ".jks", ".pepk", ".ico",
+	".keystore", ".jks", ".pepk", ".gpg", ".ico",
 	".eot", ".rdb", ".woff", ".woff2", ".ttf", ".otf",
 }
 
