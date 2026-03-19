@@ -154,3 +154,83 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveConfig_Priority(t *testing.T) {
+	base := &Config{
+		DB:               "http://from-config:8000",
+		EmbeddingBackend: "ollama",
+		EmbeddingModel:   "nomic-embed-text",
+		EmbeddingURL:     "http://from-config:11434",
+	}
+	t.Setenv(EnvDBURL, "http://from-env:8000")
+	t.Setenv(EnvEmbeddingBackend, "openai")
+	t.Setenv(EnvEmbeddingModel, "text-embedding-3-small")
+	t.Setenv(EnvEmbeddingURL, "http://from-env:1234")
+
+	got := ResolveConfig(base, "http://from-flag:8000", "openai-compatible", "emb-model", "http://from-flag:9999")
+
+	if got.DB != "http://from-flag:8000" {
+		t.Fatalf("DB: got %q, want from flag", got.DB)
+	}
+	if got.EmbeddingBackend != "openai-compatible" {
+		t.Fatalf("EmbeddingBackend: got %q, want from flag", got.EmbeddingBackend)
+	}
+	if got.EmbeddingModel != "emb-model" {
+		t.Fatalf("EmbeddingModel: got %q, want from flag", got.EmbeddingModel)
+	}
+	if got.EmbeddingURL != "http://from-flag:9999" {
+		t.Fatalf("EmbeddingURL: got %q, want from flag", got.EmbeddingURL)
+	}
+}
+
+func TestResolveConfig_DefaultsAndEnv(t *testing.T) {
+	t.Setenv(EnvDBURL, "http://from-env-only:8000")
+	t.Setenv(EnvEmbeddingBackend, "ollama")
+	t.Setenv(EnvEmbeddingModel, "mxbai-embed-large")
+	t.Setenv(EnvEmbeddingURL, "http://localhost:11434")
+
+	got := ResolveConfig(nil, "", "", "", "")
+
+	if got.DB != "http://from-env-only:8000" {
+		t.Fatalf("DB: got %q, want env override", got.DB)
+	}
+	if got.EmbeddingBackend != "ollama" {
+		t.Fatalf("EmbeddingBackend: got %q", got.EmbeddingBackend)
+	}
+	if got.EmbeddingModel != "mxbai-embed-large" {
+		t.Fatalf("EmbeddingModel: got %q", got.EmbeddingModel)
+	}
+	if got.EmbeddingURL != "http://localhost:11434" {
+		t.Fatalf("EmbeddingURL: got %q", got.EmbeddingURL)
+	}
+}
+
+func TestLoadOrDefault_EmptyPath(t *testing.T) {
+	cfg, err := LoadOrDefault("")
+	if err != nil {
+		t.Fatalf("LoadOrDefault empty path: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("expected non-nil config")
+	}
+	if cfg.DB != "" {
+		t.Fatalf("expected empty loaded DB, got %q", cfg.DB)
+	}
+}
+
+func TestResolveConfig_EmbeddingAliasEnv(t *testing.T) {
+	t.Setenv(EnvEmbeddingBackendAlias, "openai")
+	t.Setenv(EnvEmbeddingModelAlias, "text-embedding-3-large")
+	t.Setenv(EnvEmbeddingURLAlias, "https://example.invalid")
+
+	got := ResolveConfig(nil, "", "", "", "")
+	if got.EmbeddingBackend != "openai" {
+		t.Fatalf("EmbeddingBackend: got %q", got.EmbeddingBackend)
+	}
+	if got.EmbeddingModel != "text-embedding-3-large" {
+		t.Fatalf("EmbeddingModel: got %q", got.EmbeddingModel)
+	}
+	if got.EmbeddingURL != "https://example.invalid" {
+		t.Fatalf("EmbeddingURL: got %q", got.EmbeddingURL)
+	}
+}

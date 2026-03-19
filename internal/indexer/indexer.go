@@ -154,14 +154,11 @@ func HashFile(path string, size, mtime int64, cache *hashCache) (string, error) 
 
 // HasChanged determines whether a file has changed since last index.
 // Size → MTime → Hash cascade is sacred — do not reorder.
-func HasChanged(ctx context.Context, client *db.ChromaClient, repo, filePath string, info os.FileInfo, cache *hashCache) (bool, string, error) {
+func HasChanged(fileMetas map[string]*db.FileMeta, filePath string, info os.FileInfo, cache *hashCache) (bool, string, error) {
 	size := info.Size()
 	mtime := info.ModTime().Unix()
 
-	meta, err := client.GetFileMeta(ctx, repo, filePath)
-	if err != nil {
-		return false, "", fmt.Errorf("get file meta: %w", err)
-	}
+	meta := fileMetas[filePath]
 	if meta == nil {
 		hash, err := HashFile(filePath, size, mtime, cache)
 		if err != nil {
@@ -191,11 +188,21 @@ func HasChanged(ctx context.Context, client *db.ChromaClient, repo, filePath str
 
 const indexWorkers = 8
 
+const (
+	// Flush metadata in moderately sized groups to reduce API round-trips
+	// while keeping request payloads bounded for steady-memory indexing runs.
+	// Value follows plan04 phase-2 target.
+	fileMetaFlushSize = 50
+	// Flush chunks in larger groups because they dominate write volume.
+	// Value follows plan04 phase-2 target.
+	chunkFlushSize = 500
+)
+
 // processFile runs detect → deduplicate → chunk → store for one file.
 func processFile(ctx context.Context, cfg IndexerConfig, path string, info os.FileInfo,
-	cache *hashCache, seenHashes *sync.Map) (ls IndexStats) {
+	cache *hashCache, seenHashes *sync.Map, fileMetas map[string]*db.FileMeta) (ls IndexStats, chunks []db.Chunk, meta *db.FileMeta) {
 
-	changed, hash, err := HasChanged(ctx, cfg.DB, cfg.RepoName, path, info, cache)
+	changed, hash, err := HasChanged(fileMetas, path, info, cache)
 	if err != nil {
 		log.Printf("[indexer] change check %s: %v", path, err)
 		ls.Errors++
@@ -219,30 +226,27 @@ func processFile(ctx context.Context, cfg IndexerConfig, path string, info os.Fi
 	}
 
 	lang := DetectLanguage(path)
-	chunks, err := cfg.ChunkFn(cfg.RepoName, path, string(content), lang)
+	chunks, err = cfg.ChunkFn(cfg.RepoName, path, string(content), lang)
 	if err != nil {
 		log.Printf("[indexer] chunk %s: %v", path, err)
 		ls.Errors++
 		return
 	}
-	if err := cfg.DB.DeleteFileChunks(ctx, cfg.RepoName, path); err != nil {
-		log.Printf("[indexer] delete old chunks %s: %v", path, err)
-		ls.Errors++
-		return
-	}
-	if len(chunks) > 0 {
-		if err := cfg.DB.UpsertChunks(ctx, chunks); err != nil {
-			log.Printf("[indexer] upsert chunks %s: %v", path, err)
+	if cfg.DB != nil {
+		if err := cfg.DB.DeleteFileChunks(ctx, cfg.RepoName, path); err != nil {
+			log.Printf("[indexer] delete old chunks %s: %v", path, err)
 			ls.Errors++
 			return
 		}
 	}
-	if err := cfg.DB.UpsertFileMeta(ctx, cfg.RepoName, path, info.Size(), info.ModTime().Unix(), hash); err != nil {
-		log.Printf("[indexer] upsert meta %s: %v", path, err)
-		ls.Errors++
-		return
-	}
 	ls.ChunksUpserted = len(chunks)
+	meta = &db.FileMeta{
+		Repo:  cfg.RepoName,
+		Path:  path,
+		Size:  info.Size(),
+		MTime: info.ModTime().Unix(),
+		Hash:  hash,
+	}
 	return
 }
 
@@ -263,6 +267,14 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 
 	stats := &IndexStats{IndexMode: "full"}
 	cache := newHashCache()
+	fileMetas := map[string]*db.FileMeta{}
+	if cfg.DB != nil {
+		batchMeta, err := cfg.DB.GetBatchFileMeta(ctx, cfg.RepoName)
+		if err != nil {
+			return nil, fmt.Errorf("load file metadata cache: %w", err)
+		}
+		fileMetas = batchMeta
+	}
 
 	seenHashes := cfg.SeenHashes
 	if seenHashes == nil {
@@ -290,13 +302,36 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	metaBuffer := make([]db.FileMeta, 0, fileMetaFlushSize)
+	chunkBuffer := make([]db.Chunk, 0, chunkFlushSize)
+	flushLocked := func() {
+		if cfg.DB == nil {
+			metaBuffer = metaBuffer[:0]
+			chunkBuffer = chunkBuffer[:0]
+			return
+		}
+		if len(chunkBuffer) > 0 {
+			if err := cfg.DB.UpsertChunks(ctx, chunkBuffer); err != nil {
+				log.Printf("[indexer] upsert chunks batch: %v", err)
+				stats.Errors++
+			}
+			chunkBuffer = chunkBuffer[:0]
+		}
+		if len(metaBuffer) > 0 {
+			if err := cfg.DB.UpsertBatchFileMeta(ctx, metaBuffer); err != nil {
+				log.Printf("[indexer] upsert file meta batch: %v", err)
+				stats.Errors++
+			}
+			metaBuffer = metaBuffer[:0]
+		}
+	}
 
 	for i := 0; i < indexWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for item := range workCh {
-				ls := processFile(ctx, cfg, item.path, item.info, cache, seenHashes)
+				ls, chunks, meta := processFile(ctx, cfg, item.path, item.info, cache, seenHashes, fileMetas)
 				mu.Lock()
 				stats.FilesScanned++
 				stats.FilesChanged += ls.FilesChanged
@@ -304,6 +339,17 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 				stats.FilesDedupSkip += ls.FilesDedupSkip
 				stats.ChunksUpserted += ls.ChunksUpserted
 				stats.Errors += ls.Errors
+				if ls.Errors == 0 {
+					if len(chunks) > 0 {
+						chunkBuffer = append(chunkBuffer, chunks...)
+					}
+					if meta != nil {
+						metaBuffer = append(metaBuffer, *meta)
+					}
+					if len(metaBuffer) >= fileMetaFlushSize || len(chunkBuffer) >= chunkFlushSize {
+						flushLocked()
+					}
+				}
 				mu.Unlock()
 			}
 		}()
@@ -368,6 +414,9 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 
 	close(workCh)
 	wg.Wait()
+	mu.Lock()
+	flushLocked()
+	mu.Unlock()
 
 	if feedErr != nil {
 		return stats, fmt.Errorf("directory walk failed: %w", feedErr)
