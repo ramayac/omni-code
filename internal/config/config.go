@@ -14,10 +14,12 @@ type Config struct {
 	EmbeddingModel   string `yaml:"embedding_model"`
 	EmbeddingURL     string `yaml:"embedding_url"`
 	// Global skip-list additions merged with built-in defaults for every repo.
-	SkipDirsExtra       []string    `yaml:"skip_dirs_extra"`
-	SkipExtensionsExtra []string    `yaml:"skip_extensions_extra"`
-	SkipFilenamesExtra  []string    `yaml:"skip_filenames_extra"`
-	Repos               []RepoEntry `yaml:"repos"`
+	SkipDirsExtra       []string `yaml:"skip_dirs_extra"`
+	SkipExtensionsExtra []string `yaml:"skip_extensions_extra"`
+	SkipFilenamesExtra  []string `yaml:"skip_filenames_extra"`
+	// SkipIfWrongBranch stops scanning/indexing if the repo is not on the expected branch.
+	SkipIfWrongBranch bool        `yaml:"skip_if_wrong_branch"`
+	Repos             []RepoEntry `yaml:"repos"`
 }
 
 // RepoEntry describes a single repository to be indexed.
@@ -35,6 +37,9 @@ type RepoEntry struct {
 	SkipFilenamesOverride  []string `yaml:"skip_filenames_override"`
 	// SkipBranchCheck disables branch-mismatch warnings for this repo.
 	SkipBranchCheck bool `yaml:"skip_branch_check"`
+	// SkipIfWrongBranch stops scanning/indexing if the repo is not on the expected branch.
+	// Merged with global setting (true if either is true).
+	SkipIfWrongBranch bool `yaml:"skip_if_wrong_branch"`
 }
 
 // Load reads and validates a repos.yaml config file.

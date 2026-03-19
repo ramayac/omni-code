@@ -92,6 +92,8 @@ type IndexerConfig struct {
 	Branch          string
 	StrictBranch    bool
 	SkipBranchCheck bool
+	// SkipIfWrongBranch stops scanning if the current branch doesn't match Branch.
+	SkipIfWrongBranch bool
 }
 
 // IndexStats reports the outcome of a RunIndex call.
@@ -273,6 +275,10 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 
 	if isGitRepo {
 		headCommit = detectBranchAndCommit(ctx, cfg, stats)
+		if headCommit == "" && cfg.SkipIfWrongBranch {
+			log.Printf("[indexer] skipping repo %s: not on expected branch %s", cfg.RepoName, cfg.Branch)
+			return stats, nil
+		}
 		fileList, stats.IndexMode = buildFileList(ctx, cfg, stats, headCommit)
 	}
 
@@ -389,8 +395,9 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 }
 
 // detectBranchAndCommit performs branch-mismatch detection and returns HEAD SHA.
+// If SkipIfWrongBranch is set and branch mismatches, returns empty string to signal skip.
 func detectBranchAndCommit(_ context.Context, cfg IndexerConfig, stats *IndexStats) string {
-	if !cfg.SkipBranchCheck {
+	if !cfg.SkipBranchCheck || cfg.SkipIfWrongBranch {
 		detected, err := git.DetectDefaultBranch(cfg.RootPath)
 		if err != nil {
 			log.Printf("[indexer] WARNING: could not detect default branch for %s: %v", cfg.RepoName, err)
@@ -403,6 +410,9 @@ func detectBranchAndCommit(_ context.Context, cfg IndexerConfig, stats *IndexSta
 					expected = detected
 				}
 				if current != expected {
+					if cfg.SkipIfWrongBranch {
+						return "" // Signal skip
+					}
 					msg := fmt.Sprintf("[indexer] WARNING: repo %s is on branch %s, expected %s",
 						cfg.RepoName, current, expected)
 					if cfg.StrictBranch {

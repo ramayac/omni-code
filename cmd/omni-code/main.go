@@ -230,17 +230,18 @@ func runIndex(args []string) {
 		runOne := func(repo config.RepoEntry) {
 			dirs, exts, names := config.ResolveSkipLists(*cfg, repo)
 			idxCfg := indexer.IndexerConfig{
-				RootPath:        repo.Path,
-				RepoName:        repo.Name,
-				DB:              client,
-				ChunkFn:         chunker.ChunkFile,
-				SeenHashes:      sharedHashes,
-				SkipDirs:        dirs,
-				SkipExtensions:  exts,
-				SkipFilenames:   names,
-				Branch:          repo.Branch,
-				StrictBranch:    *strictBranch,
-				SkipBranchCheck: repo.SkipBranchCheck,
+				RootPath:          repo.Path,
+				RepoName:          repo.Name,
+				DB:                client,
+				ChunkFn:           chunker.ChunkFile,
+				SeenHashes:        sharedHashes,
+				SkipDirs:          dirs,
+				SkipExtensions:    exts,
+				SkipFilenames:     names,
+				Branch:            repo.Branch,
+				StrictBranch:      *strictBranch,
+				SkipBranchCheck:   repo.SkipBranchCheck,
+				SkipIfWrongBranch: cfg.SkipIfWrongBranch || repo.SkipIfWrongBranch,
 			}
 			if est, ok := estByRepo[repo.Name]; ok {
 				log.Printf("[index] starting repo %q at %s (score=%s)", repo.Name, repo.Path, humanBytes(est.Score))
@@ -670,15 +671,16 @@ func pollOnce(ctx context.Context, cfg *config.Config, deps watchDeps) {
 			repo.Name, meta.LastIndexedCommit[:min(8, len(meta.LastIndexedCommit))], current[:min(8, len(current))])
 		dirs, exts, names := config.ResolveSkipLists(*cfg, repo)
 		idxCfg := indexer.IndexerConfig{
-			RootPath:        repo.Path,
-			RepoName:        repo.Name,
-			DB:              deps.dbClient,
-			ChunkFn:         chunker.ChunkFile,
-			SkipDirs:        dirs,
-			SkipExtensions:  exts,
-			SkipFilenames:   names,
-			Branch:          repo.Branch,
-			SkipBranchCheck: repo.SkipBranchCheck,
+			RootPath:          repo.Path,
+			RepoName:          repo.Name,
+			DB:                deps.dbClient,
+			ChunkFn:           chunker.ChunkFile,
+			SkipDirs:          dirs,
+			SkipExtensions:    exts,
+			SkipFilenames:     names,
+			Branch:            repo.Branch,
+			SkipBranchCheck:   repo.SkipBranchCheck,
+			SkipIfWrongBranch: cfg.SkipIfWrongBranch || repo.SkipIfWrongBranch,
 		}
 		stats, err := deps.runIndex(ctx, idxCfg)
 		if err != nil {
