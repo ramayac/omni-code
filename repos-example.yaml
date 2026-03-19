@@ -3,11 +3,7 @@ db: http://localhost:8000
 embedding_backend: chroma-default
 
 # Global skip additions on top of built-in defaults.
-skip_dirs_extra:
-  - ".cache"
-  - ".idea"
-  - ".vscode"
-  - "__MACOSX"
+skip_dirs_extra: []
 skip_extensions_extra:
   - ".lock"
   - ".sum"

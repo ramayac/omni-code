@@ -4,6 +4,9 @@ package config
 var DefaultSkipDirs = []string{
 	".git", "node_modules", "dist", "build",
 	"vendor", ".next", "__pycache__", ".venv", ".tox",
+	".gradle", ".cargo", "vcpkg_installed", "target", "Pods",
+	".idea", ".vscode", ".settings",
+	"__MACOSX", ".cache", ".pytest_cache",
 }
 
 // DefaultSkipExtensions contains file extensions skipped by default.
@@ -12,6 +15,12 @@ var DefaultSkipExtensions = []string{
 	".svg", ".mp4", ".mp3", ".zip", ".tar",
 	".gz", ".exe", ".dll", ".so", ".dylib",
 	".wasm", ".bin", ".dat", ".db", ".sqlite",
+	".ttf", ".otf", ".woff", ".woff2", ".dfont",
+	".avif", ".webp", ".jxl", ".tiff", ".tif", ".mkv", ".mka", ".webm", ".ogg",
+	".jar", ".iso", ".rar", ".7z",
+	".tvg", ".pbm", ".ppm", ".wav",
+	".pyc", ".pyo", ".class", ".o", ".obj",
+	".pptx", ".docx", ".xlsx",
 }
 
 // DefaultSkipFilenames contains exact filenames skipped by default.
