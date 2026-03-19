@@ -43,11 +43,10 @@ func Estimate(
 	}
 
 	filtered := make(map[string]bool, len(files))
-	for _, rel := range files {
-		if shouldSkipFile(rel, skipExts, skipNames) {
+	for _, abs := range files {
+		if shouldSkipFile(abs, skipExts, skipNames) {
 			continue
 		}
-		abs := filepath.Join(rootPath, rel)
 		info, err := os.Stat(abs)
 		if err != nil {
 			continue
@@ -55,22 +54,21 @@ func Estimate(
 		if info.IsDir() {
 			continue
 		}
-		filtered[rel] = true
+		filtered[abs] = true
 		est.TotalFiles++
 		est.TotalBytes += info.Size()
 	}
 
 	if lastCommit != "" {
-		changed, err := git.DiffFiles(rootPath, lastCommit, "HEAD")
+		changed, _, err := git.DiffFiles(rootPath, lastCommit, "HEAD")
 		if err != nil {
 			return nil, fmt.Errorf("diff files: %w", err)
 		}
 		est.ChangedFiles = 0
-		for _, rel := range changed {
-			if !filtered[rel] {
+		for _, abs := range changed {
+			if !filtered[abs] {
 				continue
 			}
-			abs := filepath.Join(rootPath, rel)
 			info, err := os.Stat(abs)
 			if err != nil || info.IsDir() {
 				continue
