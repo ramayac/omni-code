@@ -71,9 +71,9 @@ endif
 	docker exec chroma-db tar -xzf /tmp/restore.tar.gz -C /
 	@echo "[restore] done from $(FILE)"
 
-# Print repo index status table
+# Print repo index status table (REPO, BRANCH, COMMIT, LAST INDEXED, FILES, CHUNKS, MODE, DURATION)
 status: build
-	./bin/omni-code repos
+	./bin/omni-code repos --config repos.yaml
 
 # Format source code
 fmt:

@@ -358,8 +358,19 @@ func runRepos(args []string) {
 func reposList(args []string) {
 	fs := flag.NewFlagSet("repos list", flag.ExitOnError)
 	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
+	cfgPath := fs.String("config", "", "path to repos.yaml (overrides --db)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
+	}
+
+	if *cfgPath != "" {
+		cfg, err := config.Load(*cfgPath)
+		if err != nil {
+			log.Fatalf("[repos] load config: %v", err)
+		}
+		if cfg.DB != "" {
+			*dbURL = cfg.DB
+		}
 	}
 
 	ctx := context.Background()
@@ -379,14 +390,22 @@ func reposList(args []string) {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "REPO\tBRANCH\tLAST COMMIT\tLAST INDEXED\tFILES\tCHUNKS")
+	fmt.Fprintln(w, "REPO\tBRANCH\tCOMMIT\tLAST INDEXED\tFILES\tCHUNKS\tMODE\tDURATION")
 	for _, m := range metas {
 		commit := m.LastIndexedCommit
 		if len(commit) > 8 {
 			commit = commit[:8]
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%d\n",
-			m.Repo, m.CurrentBranch, commit, m.LastIndexedAt, m.FileCount, m.ChunkCount)
+		indexedAt := m.LastIndexedAt
+		if t, err := time.Parse(time.RFC3339, m.LastIndexedAt); err == nil {
+			indexedAt = t.Local().Format("2006-01-02 15:04:05")
+		}
+		duration := fmt.Sprintf("%dms", m.DurationMs)
+		if m.DurationMs >= 1000 {
+			duration = fmt.Sprintf("%.1fs", float64(m.DurationMs)/1000)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\n",
+			m.Repo, m.CurrentBranch, commit, indexedAt, m.FileCount, m.ChunkCount, m.IndexMode, duration)
 	}
 	w.Flush()
 }

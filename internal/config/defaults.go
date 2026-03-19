@@ -21,6 +21,7 @@ var DefaultSkipExtensions = []string{
 	".tvg", ".pbm", ".ppm", ".wav",
 	".pyc", ".pyo", ".class", ".o", ".obj",
 	".pptx", ".docx", ".xlsx",
+	".keystore", ".jks", ".pepk", ".ico",
 }
 
 // DefaultSkipFilenames contains exact filenames skipped by default.
