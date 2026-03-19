@@ -4,11 +4,14 @@ A local codebase indexer and **MCP server** written in Go. Connect it to GitHub 
 
 ## Features
 
-- **Intelligent change detection** — Size → MTime → SHA-256 hash cascade avoids redundant re-indexing
-- **Global deduplication** — identical files (e.g. vendored libraries) are indexed only once
-- **Tree-sitter chunking** — Go, JavaScript, TypeScript, and Python files are split at function/class boundaries for precise retrieval
-- **Line-based fallback** — markdown, Dockerfiles, and other text files are chunked by word count with overlap
-- **MCP stdio server** — plug directly into GitHub Copilot or any MCP-compatible AI assistant
+- **Git-aware indexing** — scans only tracked/untracked-but-not-ignored files; uses commit-diffs for $O(\text{changed})$ incremental re-indexing
+- **Multi-repo configuration** — configure multiple repositories in \`repos.yaml\` with custom branch and skip rules
+- **Intelligent change detection** — Hash-based change detection with global across-repo deduplication
+- **Semantic chunking** — Tree-sitter powered chunking for Go, Python, JS/TS, Rust, and Java
+- **Flexible embedding backends** — local (Ollama/Chroma-built-in) or remote (OpenAI) embedding generation
+- **Hybrid search** — combines vector similarity with BM25 keyword ranking using Reciprocal Rank Fusion (RRF)
+- **Watch mode** — background daemon that polls for Git HEAD changes and re-indexes automatically
+- **Comprehensive MCP tools** — includes \`search_codebase\`, \`list_repos\`, \`get_repo_files\`, and \`get_file_content\`
 
 ## Prerequisites
 
@@ -19,103 +22,113 @@ A local codebase indexer and **MCP server** written in Go. Connect it to GitHub 
 
 ### 1. Start ChromaDB
 
-```bash
-make docker-db
-```
+\`\`\`bash
+make docker-db-start
+\`\`\`
 
 ### 2. Build the binary
 
-```bash
+\`\`\`bash
 make build
-```
+\`\`\`
 
-The binary is placed at `bin/omni-code`.
+The binary is placed at \`bin/omni-code\`.
+
+### 3. (Optional) Create a config file
+
+Create \`repos.yaml\` to manage multiple repositories:
+
+\`\`\`yaml
+db: http://localhost:8000
+embedding_backend: ollama
+embedding_model: nomic-embed-text
+
+repos:
+  - name: omni-code
+    path: /path/to/omni-code
+    branch: main
+\`\`\`
 
 ## Usage
 
-### Index a repository
+### Indexing
 
-```bash
+\`\`\`bash
+# Index a single repository
 ./bin/omni-code index --name my-project /path/to/project
-```
+
+# Index all repositories in the config
+./bin/omni-code index --config repos.yaml
+\`\`\`
+
+### Search
+
+\`\`\`bash
+./bin/omni-code search --query "how does change detection work" --hybrid
+\`\`\`
 
 | Flag | Default | Description |
 |---|---|---|
-| `--name` | *(required)* | Logical repository name stored in ChromaDB |
-| `--db` | `http://localhost:8000` | ChromaDB base URL |
+| \`--query\` | *(required)* | Natural-language search query |
+| \`--hybrid\` | \`false\` | Enable BM25 + Vector hybrid re-ranking |
+| \`--repo\` | *(empty)* | Filter results to a specific repository |
+| \`--lang\` | *(empty)* | Filter by language (e.g. \`go\`) |
+| \`--ext\` | *(empty)* | Filter by file extension (e.g. \`.ts\`) |
+| \`--n\` | \`10\` | Number of results to return |
 
-### Search indexed code
+### Watch Mode
 
-```bash
-./bin/omni-code search --query "how does change detection work"
-```
+Start a background daemon that polls for changes every 5 minutes:
 
-| Flag | Default | Description |
-|---|---|---|
-| `--query` | *(required)* | Natural-language search query |
-| `--repo` | *(empty — all)* | Filter results to a specific repository |
-| `--n` | `10` | Number of results to return |
-| `--db` | `http://localhost:8000` | ChromaDB base URL |
+\`\`\`bash
+./bin/omni-code watch --config repos.yaml --interval 5m
+\`\`\`
 
-### Start the MCP server
+### MCP Server
 
-```bash
+\`\`\`bash
 ./bin/omni-code mcp
-```
+\`\`\`
 
-The server communicates over stdin/stdout using the MCP JSON-RPC protocol.  
-It exposes a single tool: **`search_codebase`**.
+The server exposes tools: \`search_codebase\`, \`list_repos\`, \`get_repo_files\`, \`get_file_content\`.
 
 ## GitHub Copilot Integration
 
-Add the following to your VS Code `settings.json` (or create `.vscode/mcp.json`):
+Add the following to your VS Code \`settings.json\` (or create \`.vscode/mcp.json\`):
 
-```json
+\`\`\`json
 {
-  "servers": {
-    "omni-code": {
-      "command": "/absolute/path/to/bin/omni-code",
-      "args": ["mcp"]
+  "mcp": {
+    "servers": {
+      "omni-code": {
+        "command": "/absolute/path/to/bin/omni-code",
+        "args": ["mcp"]
+      }
     }
   }
 }
-```
-
-Then in Copilot Chat, ask questions like:
-
-> "How does the indexer detect file changes?"  
-> "Show me the ChromaDB upsert logic."  
-> "What does the chunker do with large functions?"
-
-## Development
-
-```bash
-# Run tests
-make test
-
-# Index the test-data directory
-make dev
-
-# Remove build artifacts
-make clean
-```
+\`\`\`
 
 ## Architecture
 
-```
-cmd/omni-code/main.go       CLI entry point (index, search, mcp subcommands)
-internal/db/chroma.go       ChromaDB client — collections, upsert, query
-internal/indexer/indexer.go File walker, change detection, deduplication
+\`\`\`
+cmd/omni-code/main.go       CLI entry point (index, search, mcp, watch, repos)
+internal/config/            Config loading, resolution, and skip-list logic
+internal/git/               Git-aware file listing, branch detection, diffing
+internal/db/chroma.go       ChromaDB client — files, chunks, and repos collections
+internal/indexer/indexer.go Change detection, deduplication, incremental logic
 internal/chunker/chunker.go Tree-sitter & line-based chunking
-internal/mcp/server.go      MCP stdio server — search_codebase tool
-```
+internal/embedder/          Pluggable backends (Chroma, Ollama, OpenAI)
+internal/mcp/server.go      MCP server providing codebase exploration tools
+\`\`\`
 
 ## Data flow
 
-```
-filepath.WalkDir
-  → Change detection (Size → MTime → Hash)
-  → Global dedup (seenHashes map)
-  → Chunker (Tree-sitter / line-based)
-  → ChromaDB (upsert chunks + file meta)
-```
+\`\`\`
+git ls-files / filepath.WalkDir
+  → Branch check & Git diff (incremental)
+  → Content hashing & Global dedup
+  → Semantic Chunker
+  → Embedder (local/remote)
+  → ChromaDB (upsert chunks + repo/file meta)
+\`\`\`

@@ -529,6 +529,59 @@ func deleteRepo(ctx context.Context, client *db.ChromaClient, name string) {
 	}
 }
 
+// watchDeps holds injectable functions for the poll loop, used in production and tests.
+type watchDeps struct {
+	isGitRepo   func(root string) bool
+	headCommit  func(root string) (string, error)
+	getRepoMeta func(ctx context.Context, name string) (*db.RepoMeta, error)
+	runIndex    func(ctx context.Context, cfg indexer.IndexerConfig) (*indexer.IndexStats, error)
+	dbClient    *db.ChromaClient // placed into IndexerConfig.DB; may be nil in tests
+}
+
+// pollOnce iterates all repos in cfg, checks if HEAD changed since last index,
+// and re-indexes any repo whose HEAD commit differs from the stored value.
+func pollOnce(ctx context.Context, cfg *config.Config, deps watchDeps) {
+	for _, repo := range cfg.Repos {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		if !deps.isGitRepo(repo.Path) {
+			continue
+		}
+		current, err := deps.headCommit(repo.Path)
+		if err != nil {
+			log.Printf("[watch] HEAD commit for %s: %v", repo.Name, err)
+			continue
+		}
+		meta, err := deps.getRepoMeta(ctx, repo.Name)
+		if err != nil || meta == nil || meta.LastIndexedCommit == current {
+			continue
+		}
+		log.Printf("[watch] repo %s changed (%s..%s), re-indexing",
+			repo.Name, meta.LastIndexedCommit[:min(8, len(meta.LastIndexedCommit))], current[:min(8, len(current))])
+		dirs, exts, names := config.ResolveSkipLists(*cfg, repo)
+		idxCfg := indexer.IndexerConfig{
+			RootPath:        repo.Path,
+			RepoName:        repo.Name,
+			DB:              deps.dbClient,
+			ChunkFn:         chunker.ChunkFile,
+			SkipDirs:        dirs,
+			SkipExtensions:  exts,
+			SkipFilenames:   names,
+			Branch:          repo.Branch,
+			SkipBranchCheck: repo.SkipBranchCheck,
+		}
+		stats, err := deps.runIndex(ctx, idxCfg)
+		if err != nil {
+			log.Printf("[watch] index %s: %v", repo.Name, err)
+			continue
+		}
+		log.Printf("[watch] %s: %d changed, %d chunks", repo.Name, stats.FilesChanged, stats.ChunksUpserted)
+	}
+}
+
 // runWatch handles: watch --config repos.yaml [--interval 5m] [--once] [--install-hook]
 func runWatch(args []string) {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
@@ -568,47 +621,14 @@ func runWatch(args []string) {
 		log.Fatalf("[watch] %v", err)
 	}
 
-	checkAndReindex := func() {
-		for _, repo := range cfg.Repos {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			if !git.IsGitRepo(repo.Path) {
-				continue
-			}
-			current, err := git.HeadCommit(repo.Path)
-			if err != nil {
-				log.Printf("[watch] HEAD commit for %s: %v", repo.Name, err)
-				continue
-			}
-			meta, err := client.GetRepoMeta(ctx, repo.Name)
-			if err != nil || meta == nil || meta.LastIndexedCommit == current {
-				continue
-			}
-			log.Printf("[watch] repo %s changed (%s..%s), re-indexing",
-				repo.Name, meta.LastIndexedCommit[:min(8, len(meta.LastIndexedCommit))], current[:min(8, len(current))])
-			dirs, exts, names := config.ResolveSkipLists(*cfg, repo)
-			idxCfg := indexer.IndexerConfig{
-				RootPath:        repo.Path,
-				RepoName:        repo.Name,
-				DB:              client,
-				ChunkFn:         chunker.ChunkFile,
-				SkipDirs:        dirs,
-				SkipExtensions:  exts,
-				SkipFilenames:   names,
-				Branch:          repo.Branch,
-				SkipBranchCheck: repo.SkipBranchCheck,
-			}
-			stats, err := indexer.RunIndex(ctx, idxCfg)
-			if err != nil {
-				log.Printf("[watch] index %s: %v", repo.Name, err)
-				continue
-			}
-			log.Printf("[watch] %s: %d changed, %d chunks", repo.Name, stats.FilesChanged, stats.ChunksUpserted)
-		}
+	deps := watchDeps{
+		isGitRepo:   git.IsGitRepo,
+		headCommit:  git.HeadCommit,
+		getRepoMeta: client.GetRepoMeta,
+		runIndex:    indexer.RunIndex,
+		dbClient:    client,
 	}
+	checkAndReindex := func() { pollOnce(ctx, cfg, deps) }
 
 	if *once {
 		checkAndReindex()
