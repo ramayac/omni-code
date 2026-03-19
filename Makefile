@@ -1,5 +1,5 @@
 .PHONY: build test dev docker-db docker-db-start stop-db rm-db clean fmt vet tidy \
-	reset-db reset-repo reindex reindex-repo backup-db restore-db status
+	reset-db reset-repo reindex reindex-repo estimate backup-db restore-db status
 
 # Run ChromaDB locally for development
 docker-db:
@@ -86,3 +86,7 @@ vet:
 # Tidy module dependencies
 tidy:
 	go mod tidy
+
+# Estimate and print sorted scan complexity without indexing
+estimate: build
+	./bin/omni-code index --config repos.yaml --dry-run
