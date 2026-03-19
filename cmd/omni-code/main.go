@@ -135,7 +135,7 @@ func printIndexStats(stats *indexer.IndexStats) {
 func runIndex(args []string) {
 	fs := flag.NewFlagSet("index", flag.ExitOnError)
 	name := fs.String("name", "", "repository name (single-repo mode)")
-	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
+	dbURL := fs.String("db", "", "ChromaDB base URL")
 	cfgPath := fs.String("config", "", "path to repos.yaml config file")
 	repoFilter := fs.String("repo", "", "index only this repo name from the config")
 	parallel := fs.Bool("parallel", false, "index multiple repos in parallel (config mode)")
@@ -156,17 +156,24 @@ func runIndex(args []string) {
 	applyLogFlags(*verbose, *quiet)
 
 	ctx := context.Background()
-	log.Printf("[index] connecting to ChromaDB at %s", *dbURL)
-	client, err := newClientAndCollections(ctx, *dbURL, *embBackend, *embModel, *embURL)
+	var fileCfg *config.Config
+	if *cfgPath != "" {
+		var err error
+		fileCfg, err = config.Load(*cfgPath)
+		if err != nil {
+			log.Fatalf("[index] load config: %v", err)
+		}
+	}
+	runtimeCfg := config.ResolveConfig(fileCfg, *dbURL, *embBackend, *embModel, *embURL)
+
+	log.Printf("[index] connecting to ChromaDB at %s", runtimeCfg.DB)
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, runtimeCfg.EmbeddingBackend, runtimeCfg.EmbeddingModel, runtimeCfg.EmbeddingURL)
 	if err != nil {
 		log.Fatalf("[index] %v", err)
 	}
 
 	if *cfgPath != "" {
-		cfg, err := config.Load(*cfgPath)
-		if err != nil {
-			log.Fatalf("[index] load config: %v", err)
-		}
+		cfg := fileCfg
 
 		var repos []config.RepoEntry
 		for _, repo := range cfg.Repos {
@@ -342,7 +349,8 @@ func runSearch(args []string) {
 	dedup := fs.Bool("dedup", false, "keep only the top chunk per file")
 	contextLines := fs.Int("context-lines", 0, "expand results by N lines above/below")
 	hybrid := fs.Bool("hybrid", false, "enable BM25+vector hybrid re-ranking")
-	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
+	dbURL := fs.String("db", "", "ChromaDB base URL")
+	cfgPath := fs.String("config", "", "path to repos.yaml config file")
 	verbose := fs.Bool("verbose", false, "enable verbose logging")
 	quiet := fs.Bool("quiet", false, "suppress all log output")
 	fs.Usage = func() {
@@ -361,7 +369,12 @@ func runSearch(args []string) {
 	}
 
 	ctx := context.Background()
-	client, err := newClientAndCollections(ctx, *dbURL, "", "", "")
+	fileCfg, err := config.LoadOrDefault(*cfgPath)
+	if err != nil {
+		log.Fatalf("[search] load config: %v", err)
+	}
+	runtimeCfg := config.ResolveConfig(fileCfg, *dbURL, "", "", "")
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, "", "", "")
 	if err != nil {
 		log.Fatalf("[search] %v", err)
 	}
@@ -405,7 +418,8 @@ func runSearch(args []string) {
 
 func runMCP(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
-	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
+	dbURL := fs.String("db", "", "ChromaDB base URL")
+	cfgPath := fs.String("config", "", "path to repos.yaml config file")
 	verbose := fs.Bool("verbose", false, "enable verbose logging")
 	quiet := fs.Bool("quiet", false, "suppress all log output")
 	fs.Usage = func() {
@@ -418,7 +432,12 @@ func runMCP(args []string) {
 	applyLogFlags(*verbose, *quiet)
 
 	ctx := context.Background()
-	client, err := newClientAndCollections(ctx, *dbURL, "", "", "")
+	fileCfg, err := config.LoadOrDefault(*cfgPath)
+	if err != nil {
+		log.Fatalf("[mcp] load config: %v", err)
+	}
+	runtimeCfg := config.ResolveConfig(fileCfg, *dbURL, "", "", "")
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, "", "", "")
 	if err != nil {
 		log.Fatalf("[mcp] %v", err)
 	}
@@ -446,24 +465,19 @@ func runRepos(args []string) {
 
 func reposList(args []string) {
 	fs := flag.NewFlagSet("repos list", flag.ExitOnError)
-	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
-	cfgPath := fs.String("config", "", "path to repos.yaml (overrides --db)")
+	dbURL := fs.String("db", "", "ChromaDB base URL")
+	cfgPath := fs.String("config", "", "path to repos.yaml config file")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
 	}
 
-	if *cfgPath != "" {
-		cfg, err := config.Load(*cfgPath)
-		if err != nil {
-			log.Fatalf("[repos] load config: %v", err)
-		}
-		if cfg.DB != "" {
-			*dbURL = cfg.DB
-		}
-	}
-
 	ctx := context.Background()
-	client, err := newClientAndCollections(ctx, *dbURL, "", "", "")
+	fileCfg, err := config.LoadOrDefault(*cfgPath)
+	if err != nil {
+		log.Fatalf("[repos] load config: %v", err)
+	}
+	runtimeCfg := config.ResolveConfig(fileCfg, *dbURL, "", "", "")
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, "", "", "")
 	if err != nil {
 		log.Fatalf("[repos] %v", err)
 	}
@@ -547,7 +561,7 @@ func reposRemove(args []string) {
 
 	fs := flag.NewFlagSet("repos remove", flag.ExitOnError)
 	cfgPath := fs.String("config", "repos.yaml", "path to repos.yaml")
-	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
+	dbURL := fs.String("db", "", "ChromaDB base URL")
 	if err := fs.Parse(args[1:]); err != nil {
 		os.Exit(1)
 	}
@@ -576,7 +590,8 @@ func reposRemove(args []string) {
 	}
 
 	ctx := context.Background()
-	client, err := newClientAndCollections(ctx, *dbURL, "", "", "")
+	runtimeCfg := config.ResolveConfig(cfg, *dbURL, "", "", "")
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, "", "", "")
 	if err != nil {
 		log.Fatalf("[repos remove] db connect: %v", err)
 	}
@@ -589,7 +604,8 @@ func runReset(args []string) {
 	fs := flag.NewFlagSet("reset", flag.ExitOnError)
 	all := fs.Bool("all", false, "drop and recreate all collections")
 	repo := fs.String("repo", "", "delete data for a specific repo")
-	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
+	dbURL := fs.String("db", "", "ChromaDB base URL")
+	cfgPath := fs.String("config", "", "path to repos.yaml config file")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: omni-code reset --all | omni-code reset --repo <name>\n")
 	}
@@ -603,7 +619,12 @@ func runReset(args []string) {
 	}
 
 	ctx := context.Background()
-	client, err := newClientAndCollections(ctx, *dbURL, "", "", "")
+	fileCfg, err := config.LoadOrDefault(*cfgPath)
+	if err != nil {
+		log.Fatalf("[reset] load config: %v", err)
+	}
+	runtimeCfg := config.ResolveConfig(fileCfg, *dbURL, "", "", "")
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, "", "", "")
 	if err != nil {
 		log.Fatalf("[reset] %v", err)
 	}
@@ -698,7 +719,7 @@ func runWatch(args []string) {
 	interval := fs.Duration("interval", 5*time.Minute, "polling interval for HEAD changes")
 	once := fs.Bool("once", false, "check once and exit (useful in post-commit hooks)")
 	installHook := fs.Bool("install-hook", false, "install git post-commit hooks for all repos")
-	dbURL := fs.String("db", "http://localhost:8000", "ChromaDB base URL")
+	dbURL := fs.String("db", "", "ChromaDB base URL")
 	embBackend := fs.String("embedding-backend", "", "embedding backend")
 	embModel := fs.String("embedding-model", "", "embedding model name")
 	embURL := fs.String("embedding-url", "", "embedding service URL")
@@ -725,7 +746,8 @@ func runWatch(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	client, err := newClientAndCollections(ctx, *dbURL, *embBackend, *embModel, *embURL)
+	runtimeCfg := config.ResolveConfig(cfg, *dbURL, *embBackend, *embModel, *embURL)
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, runtimeCfg.EmbeddingBackend, runtimeCfg.EmbeddingModel, runtimeCfg.EmbeddingURL)
 	if err != nil {
 		log.Fatalf("[watch] %v", err)
 	}

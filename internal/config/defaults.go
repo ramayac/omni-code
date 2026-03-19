@@ -1,5 +1,10 @@
 package config
 
+const (
+	// DefaultDBURL is the default ChromaDB endpoint used when no config/env/flag overrides it.
+	DefaultDBURL = "http://localhost:8000"
+)
+
 // DefaultSkipDirs contains directory names skipped during file walking by default.
 var DefaultSkipDirs = []string{
 	".git", "node_modules", "dist", "build",
@@ -21,7 +26,7 @@ var DefaultSkipExtensions = []string{
 	".tvg", ".pbm", ".ppm", ".wav",
 	".pyc", ".pyo", ".class", ".o", ".obj",
 	".pptx", ".docx", ".xlsx",
-	".keystore", ".jks", ".pepk", ".ico",
+	".keystore", ".jks", ".pepk", ".gpg", ".ico",
 	".eot", ".rdb", ".woff", ".woff2", ".ttf", ".otf",
 }
 

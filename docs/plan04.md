@@ -5,26 +5,26 @@ Plan for evolving `omni-code` into a high-performance, event-driven development 
 ## Phase 1: Global Configuration Consolidation
 *Goal: Centralize flag/config/env resolution to eliminate duplication and hardcoded defaults.*
 
-- [ ] Refactor `internal/config` to support a merged resolution strategy (Defaults -> `repos.yaml` -> Env -> Flags).
-- [ ] Add support for `OMNI_DB_URL`, `OMNI_EMO_BACKEND`, etc., as environment variables.
-- [ ] Update all subcommands (`search`, `mcp`, `watch`, `repos`) to accept `--config` and honor global settings.
-- [ ] Eliminate hardcoded `http://localhost:8000` from `runSearch` and `runMCP`.
+- [x] Refactor `internal/config` to support a merged resolution strategy (Defaults -> `repos.yaml` -> Env -> Flags).
+- [x] Add support for `OMNI_DB_URL`, `OMNI_EMO_BACKEND`, etc., as environment variables.
+- [x] Update all subcommands (`search`, `mcp`, `watch`, `repos`) to accept `--config` and honor global settings.
+- [x] Eliminate hardcoded `http://localhost:8000` from `runSearch` and `runMCP`.
 
 ## Phase 2: Indexing Performance & Filtering
 *Goal: Reduce network round-trips and add strict branch enforcement.*
 
-- [ ] Implement `GetBatchFileMeta` in `internal/db` to pre-fetch all file metadata for a repo at scan start.
+- [x] Implement `GetBatchFileMeta` in `internal/db` to pre-fetch all file metadata for a repo at scan start.
 - [ ] Modify `indexer.processFile` to buffer chunk and metadata upserts.
 - [ ] Implement batch flush logic in `internal/db.ChromaClient` (e.g., flush every 50 files or 500 chunks).
-- [ ] Add `skip_if_wrong_branch: boolean` to `RepoEntry` in `internal/config`.
-- [ ] Update `indexer.RunIndex` to skip scanning entirely if `skip_if_wrong_branch` is true and the current branch doesn't match.
+- [x] Add `skip_if_wrong_branch: boolean` to `RepoEntry` in `internal/config`.
+- [x] Update `indexer.RunIndex` to skip scanning entirely if `skip_if_wrong_branch` is true and the current branch doesn't match.
 
 ## Phase 3: Embedding Optimization
 *Goal: Speed up vector generation through parallelism and smarter batching.*
 
 - [ ] Parallelize `OllamaEmbedder` using `errgroup` (currently sequential).
 - [ ] Add batching logic to `internal/db.UpsertChunks` to split massive file chunk lists into optimal API batch sizes.
-- [ ] Implement a lightweight per-run hash cache to avoid re-reading files for global deduplication checks.
+- [x] Implement a lightweight per-run hash cache to avoid re-reading files for global deduplication checks.
 
 ## Phase 4: Watch Mode: Instant Monitoring (fsnotify)
 *Goal: Replace polling with event-based change detection.*

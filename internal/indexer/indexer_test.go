@@ -9,9 +9,23 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ramayac/omni-code/internal/config"
 )
+
+type fakeFileInfo struct {
+	name  string
+	size  int64
+	mtime int64
+}
+
+func (f fakeFileInfo) Name() string       { return f.name }
+func (f fakeFileInfo) Size() int64        { return f.size }
+func (f fakeFileInfo) Mode() os.FileMode  { return 0o644 }
+func (f fakeFileInfo) ModTime() time.Time { return time.Unix(f.mtime, 0) }
+func (f fakeFileInfo) IsDir() bool        { return false }
+func (f fakeFileInfo) Sys() any           { return nil }
 
 // ---- ShouldSkipDir ----
 
@@ -70,6 +84,7 @@ func TestShouldSkipFile_Extensions(t *testing.T) {
 		{"/repo/file.dat", true},
 		{"/repo/store.db", true},
 		{"/repo/store.sqlite", true},
+		{"/repo/secret.gpg", true},
 		{"/repo/main.go", false},
 		{"/repo/app.ts", false},
 		{"/repo/app.tsx", false},
@@ -216,6 +231,45 @@ func TestDeduplication(t *testing.T) {
 	// Different hash is a new entry.
 	if _, loaded := seenHashes.LoadOrStore("otherhash", true); loaded {
 		t.Error("distinct hash should not be found in seenHashes")
+	}
+}
+
+func TestHasChanged_UsesBatchMetadataMap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "same.txt")
+	content := []byte("hello")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cache := newHashCache()
+	hash, err := HashFile(path, info.Size(), info.ModTime().Unix(), cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileMetas := map[string]*db.FileMeta{
+		path: {
+			Repo:  "r",
+			Path:  path,
+			Size:  info.Size(),
+			MTime: info.ModTime().Unix(),
+			Hash:  hash,
+		},
+	}
+
+	changed, gotHash, err := HasChanged(fileMetas, path, info, cache)
+	if err != nil {
+		t.Fatalf("HasChanged: %v", err)
+	}
+	if changed {
+		t.Fatalf("expected unchanged file")
+	}
+	if gotHash != hash {
+		t.Fatalf("hash mismatch: got %s want %s", gotHash, hash)
 	}
 }
 

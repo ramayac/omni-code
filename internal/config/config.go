@@ -7,6 +7,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	EnvDBURL            = "OMNI_DB_URL"
+	EnvEmbeddingBackend = "OMNI_EMO_BACKEND"
+	EnvEmbeddingModel   = "OMNI_EMO_MODEL"
+	EnvEmbeddingURL     = "OMNI_EMO_URL"
+	// Also support explicit EMBEDDING-prefixed aliases for readability.
+	EnvEmbeddingBackendAlias = "OMNI_EMBEDDING_BACKEND"
+	EnvEmbeddingModelAlias   = "OMNI_EMBEDDING_MODEL"
+	EnvEmbeddingURLAlias     = "OMNI_EMBEDDING_URL"
+)
+
 // Config is the top-level structure of repos.yaml.
 type Config struct {
 	DB               string `yaml:"db"`
@@ -56,6 +67,77 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// LoadOrDefault returns an empty config when path is empty, otherwise loads and validates the file.
+func LoadOrDefault(path string) (*Config, error) {
+	if path == "" {
+		return &Config{}, nil
+	}
+	return Load(path)
+}
+
+// ResolveConfig applies merged config resolution in this order:
+// Defaults -> repos.yaml -> environment -> explicit CLI overrides.
+// Empty cli* values are treated as "not explicitly set".
+func ResolveConfig(base *Config, cliDB, cliEmbeddingBackend, cliEmbeddingModel, cliEmbeddingURL string) Config {
+	resolved := Config{
+		DB:               DefaultDBURL,
+		EmbeddingBackend: "",
+		EmbeddingModel:   "",
+		EmbeddingURL:     "",
+	}
+	if base != nil {
+		if base.DB != "" {
+			resolved.DB = base.DB
+		}
+		if base.EmbeddingBackend != "" {
+			resolved.EmbeddingBackend = base.EmbeddingBackend
+		}
+		if base.EmbeddingModel != "" {
+			resolved.EmbeddingModel = base.EmbeddingModel
+		}
+		if base.EmbeddingURL != "" {
+			resolved.EmbeddingURL = base.EmbeddingURL
+		}
+	}
+
+	if v := firstEnv(EnvDBURL); v != "" {
+		resolved.DB = v
+	}
+	if v := firstEnv(EnvEmbeddingBackend, EnvEmbeddingBackendAlias); v != "" {
+		resolved.EmbeddingBackend = v
+	}
+	if v := firstEnv(EnvEmbeddingModel, EnvEmbeddingModelAlias); v != "" {
+		resolved.EmbeddingModel = v
+	}
+	if v := firstEnv(EnvEmbeddingURL, EnvEmbeddingURLAlias); v != "" {
+		resolved.EmbeddingURL = v
+	}
+
+	if cliDB != "" {
+		resolved.DB = cliDB
+	}
+	if cliEmbeddingBackend != "" {
+		resolved.EmbeddingBackend = cliEmbeddingBackend
+	}
+	if cliEmbeddingModel != "" {
+		resolved.EmbeddingModel = cliEmbeddingModel
+	}
+	if cliEmbeddingURL != "" {
+		resolved.EmbeddingURL = cliEmbeddingURL
+	}
+
+	return resolved
+}
+
+func firstEnv(keys ...string) string {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // Save writes a Config back to disk as YAML.

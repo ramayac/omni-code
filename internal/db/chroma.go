@@ -197,6 +197,35 @@ func (c *ChromaClient) UpsertFileMeta(ctx context.Context, repo, path string, si
 	return nil
 }
 
+// UpsertBatchFileMeta stores or updates file metadata in one request.
+func (c *ChromaClient) UpsertBatchFileMeta(ctx context.Context, metas []FileMeta) error {
+	if len(metas) == 0 {
+		return nil
+	}
+	ids := make([]chromadb.DocumentID, len(metas))
+	texts := make([]string, len(metas))
+	docMetas := make([]chromadb.DocumentMetadata, len(metas))
+	for i, fm := range metas {
+		ids[i] = fileDocID(fm.Repo, fm.Path)
+		texts[i] = fm.Path
+		docMetas[i] = chromadb.NewDocumentMetadata(
+			chromadb.NewStringAttribute("repo", fm.Repo),
+			chromadb.NewStringAttribute("path", fm.Path),
+			chromadb.NewStringAttribute("hash", fm.Hash),
+			chromadb.NewIntAttribute("size", fm.Size),
+			chromadb.NewIntAttribute("mtime", fm.MTime),
+		)
+	}
+	if err := c.files.Upsert(ctx,
+		chromadb.WithIDs(ids...),
+		chromadb.WithTexts(texts...),
+		chromadb.WithMetadatas(docMetas...),
+	); err != nil {
+		return fmt.Errorf("failed to upsert %d file metas: %w", len(metas), err)
+	}
+	return nil
+}
+
 // UpsertChunks batch-upserts code/text chunks into the `chunks` collection.
 // When an external embedder is configured (SetEmbedder), embeddings are computed
 // externally and passed to ChromaDB; otherwise ChromaDB's built-in EF is used.
@@ -316,6 +345,21 @@ func (c *ChromaClient) QueryAllFileMeta(ctx context.Context, repo string) ([]Fil
 		fm.MTime, _ = m.GetInt("mtime")
 		fm.Hash, _ = m.GetString("hash")
 		out = append(out, fm)
+	}
+	return out, nil
+}
+
+// GetBatchFileMeta returns file metadata keyed by absolute path for one repo.
+func (c *ChromaClient) GetBatchFileMeta(ctx context.Context, repo string) (map[string]*FileMeta, error) {
+	rows, err := c.QueryAllFileMeta(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]*FileMeta, len(rows))
+	for i := range rows {
+		row := rows[i]
+		rowCopy := row
+		out[row.Path] = &rowCopy
 	}
 	return out, nil
 }
