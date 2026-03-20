@@ -57,3 +57,4 @@ Plan for evolving `omni-code` into a high-performance, event-driven development 
 - [ ] Implement `grep_codebase`: Literal/regex search utility using `git grep`.
 - [ ] Implement `reindex_repo`: Allow an MCP client to trigger a refresh of a specific repository.
 - [ ] Add progress bars/percentage reporting to the CLI indexer.
+- [ ] Implement sorted scheduling in watch loop: Use `estimator` to re-order changed repos before re-indexing (from Plan 03).

@@ -147,9 +147,9 @@ No new external dependencies — uses only `internal/git` and stdlib `os.Stat`.
 
 ## 7. Implementation Checklist
 
-- [ ] `internal/estimator/estimator.go` — `ScanEstimate`, `Estimate`, `SortByScore`
-- [ ] `internal/estimator/estimator_test.go` — unit tests
-- [ ] `cmd/omni-code/main.go` — estimate + sort before `runOne` loop
-- [ ] `cmd/omni-code/main.go` — `--dry-run` flag
+- [x] `internal/estimator/estimator.go` — `ScanEstimate`, `Estimate`, `SortByScore`
+- [x] `internal/estimator/estimator_test.go` — unit tests
+- [x] `cmd/omni-code/main.go` — estimate + sort before `runOne` loop
+- [x] `cmd/omni-code/main.go` — `--dry-run` flag
 - [ ] Watch loop — sort changed repos by estimate before re-indexing
-- [ ] `AGENTS.md` — add `internal/estimator/` row to the package table
+- [x] `AGENTS.md` — add `internal/estimator/` row to the package table

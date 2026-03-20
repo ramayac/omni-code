@@ -4,3 +4,6 @@ repos.yaml
 build.log
 .gitignore
 build_error.txt
+error.txt
+get.log
+tidy.log

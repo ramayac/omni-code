@@ -8,8 +8,13 @@ import (
 
 	sitter "github.com/tree-sitter/go-tree-sitter"
 	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
+	tree_sitter_html "github.com/tree-sitter/tree-sitter-html/bindings/go"
+	tree_sitter_java "github.com/tree-sitter/tree-sitter-java/bindings/go"
 	tree_sitter_javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
+	tree_sitter_json "github.com/tree-sitter/tree-sitter-json/bindings/go"
+	tree_sitter_php "github.com/tree-sitter/tree-sitter-php/bindings/go"
 	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
+	tree_sitter_ruby "github.com/tree-sitter/tree-sitter-ruby/bindings/go"
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 
 	"github.com/ramayac/omni-code/internal/db"
@@ -50,6 +55,46 @@ var pyTopKinds = map[string]bool{
 	"decorated_definition": true,
 }
 
+// javaTopKinds lists top-level node types for Java.
+var javaTopKinds = map[string]bool{
+	"class_declaration":           true,
+	"interface_declaration":       true,
+	"enum_declaration":            true,
+	"annotation_type_declaration": true,
+	"record_declaration":          true,
+}
+
+// phpTopKinds lists top-level node types for PHP.
+var phpTopKinds = map[string]bool{
+	"class_declaration":     true,
+	"function_definition":   true,
+	"interface_declaration": true,
+	"trait_declaration":     true,
+	"namespace_definition":  true,
+}
+
+// rubyTopKinds lists top-level node types for Ruby.
+var rubyTopKinds = map[string]bool{
+	"class":            true,
+	"module":           true,
+	"method":           true,
+	"singleton_method": true,
+}
+
+// htmlTopKinds lists top-level node types for HTML.
+var htmlTopKinds = map[string]bool{
+	"element":        true,
+	"script_element": true,
+	"style_element":  true,
+}
+
+// jsonTopKinds lists top-level node types for JSON.
+var jsonTopKinds = map[string]bool{
+	"object": true,
+	"array":  true,
+	"pair":   true,
+}
+
 // ChunkFile splits source file content into semantically meaningful chunks suitable for
 // embedding. It is the package's primary entry point and satisfies indexer.ChunkFunc.
 func ChunkFile(repo, path, content, lang string) ([]db.Chunk, error) {
@@ -79,6 +124,31 @@ func ChunkFile(repo, path, content, lang string) ([]db.Chunk, error) {
 	case "python":
 		if chunks, err := chunkCode(repo, path, content, lang,
 			sitter.NewLanguage(tree_sitter_python.Language()), pyTopKinds); err == nil && len(chunks) > 0 {
+			return chunks, nil
+		}
+	case "java":
+		if chunks, err := chunkCode(repo, path, content, lang,
+			sitter.NewLanguage(tree_sitter_java.Language()), javaTopKinds); err == nil && len(chunks) > 0 {
+			return chunks, nil
+		}
+	case "php":
+		if chunks, err := chunkCode(repo, path, content, lang,
+			sitter.NewLanguage(tree_sitter_php.LanguagePHP()), phpTopKinds); err == nil && len(chunks) > 0 {
+			return chunks, nil
+		}
+	case "ruby":
+		if chunks, err := chunkCode(repo, path, content, lang,
+			sitter.NewLanguage(tree_sitter_ruby.Language()), rubyTopKinds); err == nil && len(chunks) > 0 {
+			return chunks, nil
+		}
+	case "html":
+		if chunks, err := chunkCode(repo, path, content, lang,
+			sitter.NewLanguage(tree_sitter_html.Language()), htmlTopKinds); err == nil && len(chunks) > 0 {
+			return chunks, nil
+		}
+	case "json":
+		if chunks, err := chunkCode(repo, path, content, lang,
+			sitter.NewLanguage(tree_sitter_json.Language()), jsonTopKinds); err == nil && len(chunks) > 0 {
 			return chunks, nil
 		}
 	}
