@@ -1,5 +1,9 @@
-.PHONY: build test dev docker-db docker-db-start stop-db rm-db clean fmt vet tidy \
+.PHONY: help build test dev docker-db docker-db-start stop-db rm-db clean fmt vet tidy \
 	reset-db reset-repo reindex reindex-repo estimate backup-db restore-db status
+
+# Show this help message
+help:
+	@awk '/^# /{c=substr($$0,3);next}c&&/^[[:alpha:]][[:alnum:]_-]+:/{printf "  \033[36m%-18s\033[0m %s\n", $$1, c}1{c=0}' $(MAKEFILE_LIST)
 
 # Run ChromaDB locally for development
 docker-db:
