@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -37,6 +38,7 @@ func buildServer(client *db.ChromaClient) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_repos",
 		Description: "List all indexed repositories with stats (branch, last commit, file count, chunk count).",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
 		return handleListRepos(ctx, client)
 	})
@@ -79,6 +81,7 @@ func buildServer(client *db.ChromaClient) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "index_status",
 		Description: "Detailed breakdown of when/how each repo was last indexed.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
 		return handleIndexStatus(ctx, client)
 	})
