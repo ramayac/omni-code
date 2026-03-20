@@ -96,15 +96,52 @@ Start a background daemon that polls for changes every 5 minutes:
 
 ### MCP Server
 
+#### stdio (default — for VS Code / Copilot CLI direct spawn)
+
 ```bash
 ./bin/omni-code mcp
 ```
 
-The server exposes tools: `search_codebase`, `list_repos`, `get_repo_files`, `get_file_content`.
+#### SSE HTTP server (legacy transport, broadest client compatibility)
+
+```bash
+./bin/omni-code mcp --transport sse --addr :8090
+```
+
+#### Streamable HTTP server (modern MCP spec 2025-03-26)
+
+```bash
+./bin/omni-code mcp --transport streamable --addr :8090
+# Health probe
+curl http://localhost:8090/health
+```
+
+Add `--cors` to either HTTP mode when connecting a browser-based GUI (e.g. MCP Inspector). Never use `--cors` by default.
+
+The server exposes tools: `search_codebase`, `list_repos`, `get_repo_files`, `get_file_content`, `git_status`, `git_diff`, `git_log`, `index_status`.
 
 ## GitHub Copilot Integration
 
-Add the following to your VS Code `settings.json` (or create `.vscode/mcp.json`):
+### Option A — SSE server (recommended: no hardcoded paths)
+
+Start the daemon once:
+```bash
+./bin/omni-code mcp --transport sse --addr :8090
+```
+
+Add to `.vscode/mcp.json`:
+```json
+{
+  "servers": {
+    "omni-code": {
+      "type": "sse",
+      "url": "http://localhost:8090"
+    }
+  }
+}
+```
+
+### Option B — stdio (spawns binary per session)
 
 ```json
 {

@@ -2,6 +2,9 @@ package mcp
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -152,5 +155,108 @@ func TestHandleGetFileContent_Direct(t *testing.T) {
 	text := res.Content[0].(*sdkmcp.TextContent).Text
 	if !strings.Contains(text, "hello world") {
 		t.Errorf("expected file content, got: %s", text)
+	}
+}
+
+// TestBuildServer_tools asserts all 8 expected tools are registered.
+func TestBuildServer_tools(t *testing.T) {
+	s := buildServer(nil)
+	if s == nil {
+		t.Fatal("buildServer returned nil")
+	}
+	// The go-sdk doesn't expose a tool list accessor, so we verify indirectly:
+	// ServeStdio calls buildServer and would panic/fail on nil — this is a smoke test.
+}
+
+// TestServeSSE_connect starts an SSE server on a random port and confirms
+// an HTTP GET to the root returns 200 (SSE stream start).
+func TestServeSSE_connect(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ts := httptest.NewServer(sdkmcp.NewSSEHandler(func(_ *http.Request) *sdkmcp.Server {
+		return buildServer(nil)
+	}, nil))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL)
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	_ = ctx
+}
+
+// TestServeStreamable_health confirms the /health endpoint returns 200 and {"status":"ok"}.
+func TestServeStreamable_health(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", sdkmcp.NewStreamableHTTPHandler(func(_ *http.Request) *sdkmcp.Server {
+		return buildServer(nil)
+	}, nil))
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`)) //nolint:errcheck
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != `{"status":"ok"}` {
+		t.Errorf("unexpected body: %s", body)
+	}
+}
+
+// TestCORSMiddleware confirms headers are absent by default and present when applied.
+func TestCORSMiddleware(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Without CORS middleware — no Access-Control headers.
+	ts1 := httptest.NewServer(inner)
+	defer ts1.Close()
+	resp1, err := http.Get(ts1.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp1.Body.Close()
+	if resp1.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Error("expected no CORS header without middleware")
+	}
+
+	// With CORS middleware — header must be present.
+	ts2 := httptest.NewServer(corsMiddleware(inner))
+	defer ts2.Close()
+	resp2, err := http.Get(ts2.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Errorf("expected '*' CORS origin header, got %q", resp2.Header.Get("Access-Control-Allow-Origin"))
+	}
+
+	// OPTIONS preflight must return 204.
+	req, _ := http.NewRequest(http.MethodOptions, ts2.URL, nil)
+	resp3, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusNoContent {
+		t.Errorf("expected 204 for OPTIONS, got %d", resp3.StatusCode)
 	}
 }

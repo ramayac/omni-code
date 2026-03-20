@@ -58,7 +58,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `omni-code — local codebase indexer and MCP server
+	fmt.Fprintf(os.Stderr, `omni-code — local codebase indexer and MCP server (stdio / SSE / HTTP)
 
 Usage:
   omni-code <command> [flags]
@@ -66,7 +66,7 @@ Usage:
 Commands:
   index   Scan and index repositories into ChromaDB
   search  Query indexed code from the terminal
-  mcp     Start the MCP stdio server for Copilot
+  mcp     Start the MCP server (stdio, SSE, or streamable HTTP)
   repos   Manage the repository registry (list / add / remove)
   reset   Drop indexed data (--all or --repo <name>)
   watch   Poll for git HEAD changes and re-index automatically
@@ -420,18 +420,34 @@ func runMCP(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
 	dbURL := fs.String("db", "", "ChromaDB base URL")
 	cfgPath := fs.String("config", "", "path to repos.yaml config file")
+	transport := fs.String("transport", "stdio", "transport mode: stdio | sse | streamable")
+	addr := fs.String("addr", ":8090", "host:port to listen on (sse and streamable modes only)")
+	stateless := fs.Bool("stateless", false, "streamable: disable session tracking (stateless mode)")
+	cors := fs.Bool("cors", false, "allow cross-origin requests — only use when connecting a browser-based GUI on localhost")
 	verbose := fs.Bool("verbose", false, "enable verbose logging")
 	quiet := fs.Bool("quiet", false, "suppress all log output")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: omni-code mcp [--db <url>] [--verbose] [--quiet]\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, `Usage: omni-code mcp [flags]
+
+Flags:
+`)
 		fs.PrintDefaults()
+		fmt.Fprintf(os.Stderr, `
+Examples:
+  omni-code mcp                                      # stdio (default, for VS Code / Copilot CLI)
+  omni-code mcp --transport sse --addr :8090         # SSE HTTP server (legacy, broadest compat)
+  omni-code mcp --transport streamable --addr :8090  # Streamable HTTP server (modern spec)
+  omni-code mcp --transport sse --addr :8090 --cors  # SSE with CORS for browser GUIs
+`)
 	}
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
 	}
 	applyLogFlags(*verbose, *quiet)
 
-	ctx := context.Background()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	fileCfg, err := config.LoadOrDefault(*cfgPath)
 	if err != nil {
 		log.Fatalf("[mcp] load config: %v", err)
@@ -442,8 +458,19 @@ func runMCP(args []string) {
 		log.Fatalf("[mcp] %v", err)
 	}
 
-	if err := internalmcp.ServeStdio(ctx, client); err != nil {
-		log.Fatalf("[mcp] server error: %v", err)
+	var serveErr error
+	switch *transport {
+	case "stdio", "":
+		serveErr = internalmcp.ServeStdio(ctx, client)
+	case "sse":
+		serveErr = internalmcp.ServeSSE(ctx, client, *addr, *cors)
+	case "streamable":
+		serveErr = internalmcp.ServeStreamable(ctx, client, *addr, *stateless, *cors)
+	default:
+		log.Fatalf("[mcp] unknown transport %q — valid options: stdio, sse, streamable", *transport)
+	}
+	if serveErr != nil {
+		log.Fatalf("[mcp] server error: %v", serveErr)
 	}
 }
 

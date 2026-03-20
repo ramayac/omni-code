@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -22,9 +23,8 @@ type searchParams struct {
 	NResults int    `json:"n_results" jsonschema:"Number of results to return (default 10)"`
 }
 
-// ServeStdio starts the MCP server and blocks until stdin is closed.
-// All log output goes to os.Stderr — stdout is reserved for the JSON-RPC stream.
-func ServeStdio(ctx context.Context, client *db.ChromaClient) error {
+// buildServer constructs and returns an MCP server with all tools registered.
+func buildServer(client *db.ChromaClient) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "omni-code", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -83,8 +83,80 @@ func ServeStdio(ctx context.Context, client *db.ChromaClient) error {
 		return handleIndexStatus(ctx, client)
 	})
 
+	return s
+}
+
+// ServeStdio starts the MCP server and blocks until stdin is closed.
+// All log output goes to os.Stderr — stdout is reserved for the JSON-RPC stream.
+func ServeStdio(ctx context.Context, client *db.ChromaClient) error {
+	s := buildServer(client)
 	log.Printf("[mcp] server starting on stdio")
 	return s.Run(ctx, &mcp.StdioTransport{})
+}
+
+// ServeSSE starts the MCP server using the legacy SSE HTTP transport (MCP spec 2024-11-05).
+// This is the broadest-compatibility mode; VS Code and most GUI clients support it.
+// Blocks until ctx is cancelled or the listener fails.
+func ServeSSE(ctx context.Context, client *db.ChromaClient, addr string, cors bool) error {
+	s := buildServer(client)
+	var handler http.Handler = mcp.NewSSEHandler(func(_ *http.Request) *mcp.Server { return s }, nil)
+	if cors {
+		handler = corsMiddleware(handler)
+	}
+	srv := &http.Server{Addr: addr, Handler: handler}
+	go func() {
+		<-ctx.Done()
+		srv.Shutdown(context.Background()) //nolint:errcheck
+	}()
+	log.Printf("[mcp] SSE server listening on http://%s", addr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+// ServeStreamable starts the MCP server using the modern Streamable HTTP transport (MCP spec 2025-03-26).
+// Mounts at /mcp with a /health liveness probe.
+// Blocks until ctx is cancelled or the listener fails.
+func ServeStreamable(ctx context.Context, client *db.ChromaClient, addr string, stateless bool, cors bool) error {
+	s := buildServer(client)
+	opts := &mcp.StreamableHTTPOptions{Stateless: stateless}
+	var mcpHandler http.Handler = mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server { return s }, opts)
+	if cors {
+		mcpHandler = corsMiddleware(mcpHandler)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", mcpHandler)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`)) //nolint:errcheck
+	})
+	srv := &http.Server{Addr: addr, Handler: mux}
+	go func() {
+		<-ctx.Done()
+		srv.Shutdown(context.Background()) //nolint:errcheck
+	}()
+	log.Printf("[mcp] streamable HTTP server listening on http://%s/mcp  (health: http://%s/health)", addr, addr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+// corsMiddleware wraps handler with permissive CORS headers required by browser-based GUI clients.
+// Only use with --cors flag; never enable by default.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Protocol-Version, Mcp-Session-Id")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleSearch executes the search_codebase tool call.

@@ -1,9 +1,8 @@
 {
   "servers": {
     "omni-code": {
-      "type": "stdio",
-      "command": "${workspaceFolder}/bin/omni-code",
-      "args": ["mcp"]
+      "type": "sse",
+      "url": "http://localhost:8090"
     }
   }
 }
