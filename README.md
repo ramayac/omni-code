@@ -12,7 +12,7 @@ A local codebase indexer and **MCP server** written in Go. Connect it to GitHub 
 - **Flexible embedding backends** — local (Ollama/Chroma-built-in) or remote (OpenAI) embedding generation
 - **Hybrid search** — combines vector similarity with BM25 keyword ranking using Reciprocal Rank Fusion (RRF)
 - **Watch mode** — background daemon that polls for Git HEAD changes and re-indexes automatically
-- **Comprehensive MCP tools** — includes `search_codebase`, `list_repos`, `get_repo_files`, and `get_file_content`
+- **Comprehensive MCP tools** — `search_codebase`, `list_repos`, `get_repo_files`, `get_file_content`, `git_status`, `git_diff`, `git_log`, `index_status`, `grep_codebase`, `get_file_symbols`, `reindex_repo`, `get_repo_summary`
 
 ## Prerequisites
 
@@ -118,7 +118,7 @@ curl http://localhost:8090/health
 
 Add `--cors` to either HTTP mode when connecting a browser-based GUI (e.g. MCP Inspector). Never use `--cors` by default.
 
-The server exposes tools: `search_codebase`, `list_repos`, `get_repo_files`, `get_file_content`, `git_status`, `git_diff`, `git_log`, `index_status`.
+The server exposes tools: `search_codebase`, `list_repos`, `get_repo_files`, `get_file_content`, `git_status`, `git_diff`, `git_log`, `index_status`, `grep_codebase`, `get_file_symbols`, `reindex_repo`, `get_repo_summary`.
 
 ## GitHub Copilot Integration
 

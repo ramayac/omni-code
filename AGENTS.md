@@ -33,6 +33,7 @@ Instructions for AI coding agents and LLM-assisted development.
 - **Phase 00** — Barebones indexing and search.
 - **Phase 01** — Technical core: Git-integrated, multi-repo config, watch mode daemon, hybrid search + RRF.
 - **Phase 03** — Scan complexity estimation and sorted scheduling.
+- **Phase 001** — Standalone MCP HTTP/SSE server: `--transport sse|streamable`, `--addr`, `--cors`, `--stateless` flags; `ServeSSE`, `ServeStreamable`, `corsMiddleware`; Phase 5 tools: `grep_codebase`, `get_file_symbols`, `reindex_repo`, `get_repo_summary`.
 
 ## Testing Guidelines
 

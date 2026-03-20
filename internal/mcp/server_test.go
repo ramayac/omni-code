@@ -353,3 +353,85 @@ func TestHandleGetFileSymbols_AbsPath(t *testing.T) {
 		t.Errorf("expected kind 'function_declaration', got:\n%s", text)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// get_repo_summary tests
+// ---------------------------------------------------------------------------
+
+// TestFormatRepoSummary_Basic verifies the Markdown structure of a repo summary.
+func TestFormatRepoSummary_Basic(t *testing.T) {
+meta := &db.RepoMeta{
+Repo:              "my-repo",
+CurrentBranch:     "main",
+LastIndexedCommit: "abc1234567890",
+LastIndexedAt:     "2026-03-20T10:00:00Z",
+FileCount:         3,
+ChunkCount:        10,
+IndexMode:         "incremental",
+RootPath:          "",
+}
+files := []db.FileMeta{
+{Repo: "my-repo", Path: "cmd/main.go"},
+{Repo: "my-repo", Path: "internal/foo/bar.go"},
+{Repo: "my-repo", Path: "README.md"},
+}
+
+res, _, err := formatRepoSummary(meta, files, "my-repo")
+if err != nil {
+t.Fatalf("unexpected error: %v", err)
+}
+text := res.Content[0].(*sdkmcp.TextContent).Text
+
+if !strings.Contains(text, "# Repository Summary: my-repo") {
+t.Errorf("missing header, got:\n%s", text)
+}
+if !strings.Contains(text, "main") {
+t.Errorf("missing branch, got:\n%s", text)
+}
+if !strings.Contains(text, "abc12345") {
+t.Errorf("missing short commit, got:\n%s", text)
+}
+if !strings.Contains(text, "Language Distribution") {
+t.Errorf("missing language section, got:\n%s", text)
+}
+if !strings.Contains(text, "go") {
+t.Errorf("missing 'go' language, got:\n%s", text)
+}
+if !strings.Contains(text, "Top-Level Directories") {
+t.Errorf("missing directory section, got:\n%s", text)
+}
+if !strings.Contains(text, "cmd") {
+t.Errorf("missing 'cmd' directory, got:\n%s", text)
+}
+}
+
+// TestFormatRepoSummary_EmptyFiles verifies graceful handling of no indexed files.
+func TestFormatRepoSummary_EmptyFiles(t *testing.T) {
+meta := &db.RepoMeta{
+Repo:          "empty-repo",
+CurrentBranch: "main",
+FileCount:     0,
+ChunkCount:    0,
+IndexMode:     "full",
+}
+res, _, err := formatRepoSummary(meta, nil, "empty-repo")
+if err != nil {
+t.Fatalf("unexpected error: %v", err)
+}
+text := res.Content[0].(*sdkmcp.TextContent).Text
+if !strings.Contains(text, "# Repository Summary: empty-repo") {
+t.Errorf("missing header for empty repo, got:\n%s", text)
+}
+// No language or directory sections expected when there are no files.
+if strings.Contains(text, "Language Distribution") {
+t.Errorf("unexpected language section for empty repo, got:\n%s", text)
+}
+}
+
+// TestHandleGetRepoSummary_MissingRepo verifies that an empty repo returns an error.
+func TestHandleGetRepoSummary_MissingRepo(t *testing.T) {
+_, _, err := handleGetRepoSummary(context.Background(), &db.ChromaClient{}, repoParams{})
+if err == nil {
+t.Fatal("expected error for empty repo, got nil")
+}
+}
