@@ -94,3 +94,7 @@ tidy:
 # Estimate and print sorted scan complexity without indexing
 estimate: build
 	./bin/omni-code index --config repos.yaml --dry-run
+
+# Start MCP locally
+mcp: build
+	./bin/omni-code mcp --transport sse --addr :8090
