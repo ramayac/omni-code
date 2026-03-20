@@ -273,3 +273,50 @@ func TestChunkFile_IDUniqueness(t *testing.T) {
 		}
 	}
 }
+
+// ---- ExtractSymbols ----
+
+func TestExtractSymbols_Go(t *testing.T) {
+	src := "package main\n\nfunc Foo() {}\nfunc Bar(x int) int { return x }\ntype MyType struct{}\n"
+	syms := ExtractSymbols(src, "go")
+	if len(syms) == 0 {
+		t.Fatal("expected symbols for Go source, got none")
+	}
+	names := make(map[string]bool)
+	kinds := make(map[string]bool)
+	for _, s := range syms {
+		names[s.Name] = true
+		kinds[s.Kind] = true
+		if s.StartLine <= 0 {
+			t.Errorf("symbol %q has invalid StartLine %d", s.Name, s.StartLine)
+		}
+		if s.Kind == "" {
+			t.Errorf("symbol %q has empty Kind", s.Name)
+		}
+	}
+	// Foo and Bar are function_declarations with accessible name fields.
+	for _, want := range []string{"Foo", "Bar"} {
+		if !names[want] {
+			t.Errorf("expected symbol %q, got %v", want, syms)
+		}
+	}
+	// type_declaration is present (name may be empty depending on grammar depth).
+	if !kinds["type_declaration"] {
+		t.Errorf("expected kind 'type_declaration', got kinds: %v", kinds)
+	}
+}
+
+func TestExtractSymbols_Python(t *testing.T) {
+	src := "def greet(name):\n    return 'hello ' + name\n\nclass Animal:\n    pass\n"
+	syms := ExtractSymbols(src, "python")
+	if len(syms) < 2 {
+		t.Fatalf("expected at least 2 symbols, got %d: %v", len(syms), syms)
+	}
+}
+
+func TestExtractSymbols_Unsupported(t *testing.T) {
+	syms := ExtractSymbols("some text content", "text")
+	if syms != nil {
+		t.Errorf("expected nil for unsupported language, got %v", syms)
+	}
+}

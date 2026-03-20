@@ -1,6 +1,8 @@
 package mcp
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,12 +11,16 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/ramayac/omni-code/internal/chunker"
 	"github.com/ramayac/omni-code/internal/db"
 	"github.com/ramayac/omni-code/internal/git"
+	"github.com/ramayac/omni-code/internal/indexer"
 )
 
 // searchParams defines the input schema for the search_codebase tool.
@@ -84,6 +90,27 @@ func buildServer(client *db.ChromaClient) *mcp.Server {
 		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
 		return handleIndexStatus(ctx, client)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "grep_codebase",
+		Description: "Grep indexed files for a regex pattern. Returns matching lines with file paths and line numbers.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args grepParams) (*mcp.CallToolResult, any, error) {
+		return handleGrep(ctx, client, args)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_file_symbols",
+		Description: "List top-level AST symbols (functions, classes, types, etc.) in a file using tree-sitter.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args fileContentParams) (*mcp.CallToolResult, any, error) {
+		return handleGetFileSymbols(ctx, client, args)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "reindex_repo",
+		Description: "Trigger an incremental (or full) re-index of an already-registered repository.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args reindexParams) (*mcp.CallToolResult, any, error) {
+		return handleReindexRepo(ctx, client, args)
 	})
 
 	return s
@@ -404,6 +431,235 @@ func handleGitLog(ctx context.Context, client *db.ChromaClient, args repoParams)
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: out}},
+	}, nil, nil
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 handlers
+// ---------------------------------------------------------------------------
+
+type grepParams struct {
+	Pattern    string `json:"pattern"     jsonschema:"required,RE2 regex pattern to search for"`
+	Repo       string `json:"repo"        jsonschema:"Restrict search to this repository (optional)"`
+	FileFilter string `json:"file_filter" jsonschema:"Optional glob pattern to filter file paths (e.g. '*.go')"`
+	MaxResults int    `json:"max_results" jsonschema:"Maximum number of matching lines to return (default 50)"`
+}
+
+// handleGrep searches all indexed files for lines matching a regex pattern.
+func handleGrep(ctx context.Context, client *db.ChromaClient, args grepParams) (*mcp.CallToolResult, any, error) {
+	if args.Pattern == "" {
+		return nil, nil, fmt.Errorf("pattern parameter is required")
+	}
+
+	re, err := regexp.Compile(args.Pattern)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid regex pattern: %w", err)
+	}
+
+	maxResults := args.MaxResults
+	if maxResults <= 0 {
+		maxResults = 50
+	}
+
+	// Determine which repos to scan.
+	var repoNames []string
+	if args.Repo != "" {
+		repoNames = []string{args.Repo}
+	} else {
+		metas, err := client.ListRepoMeta(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list repos: %w", err)
+		}
+		for _, m := range metas {
+			repoNames = append(repoNames, m.Repo)
+		}
+	}
+
+	type match struct {
+		repo string
+		file string
+		line int
+		text string
+	}
+	var matches []match
+
+repoLoop:
+	for _, repoName := range repoNames {
+		meta, err := client.GetRepoMeta(ctx, repoName)
+		if err != nil || meta == nil {
+			continue
+		}
+		files, err := client.QueryAllFileMeta(ctx, repoName)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			// Apply optional glob filter.
+			if args.FileFilter != "" {
+				base := path.Base(f.Path)
+				ok, _ := path.Match(args.FileFilter, base)
+				if !ok {
+					ok, _ = path.Match(args.FileFilter, f.Path)
+				}
+				if !ok {
+					continue
+				}
+			}
+
+			absPath := f.Path
+			if !filepath.IsAbs(absPath) {
+				absPath = filepath.Join(meta.RootPath, f.Path)
+			}
+
+			data, err := os.ReadFile(filepath.Clean(absPath))
+			if err != nil {
+				continue
+			}
+
+			scanner := bufio.NewScanner(bytes.NewReader(data))
+			lineNum := 0
+			for scanner.Scan() {
+				lineNum++
+				line := scanner.Text()
+				if re.MatchString(line) {
+					matches = append(matches, match{
+						repo: repoName,
+						file: f.Path,
+						line: lineNum,
+						text: line,
+					})
+					if len(matches) >= maxResults {
+						break repoLoop
+					}
+				}
+			}
+		}
+	}
+
+	if len(matches) == 0 {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("No matches found for pattern: %s", args.Pattern)}},
+		}, nil, nil
+	}
+
+	var sb strings.Builder
+	for _, m := range matches {
+		fmt.Fprintf(&sb, "%s:%s:%d: %s\n", m.repo, m.file, m.line, m.text)
+	}
+	if len(matches) == maxResults {
+		fmt.Fprintf(&sb, "\n(results capped at %d — narrow with repo or file_filter)", maxResults)
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
+	}, nil, nil
+}
+
+// handleGetFileSymbols extracts top-level AST symbols from a file via tree-sitter.
+func handleGetFileSymbols(ctx context.Context, client *db.ChromaClient, args fileContentParams) (*mcp.CallToolResult, any, error) {
+	if args.Repo == "" || args.Path == "" {
+		return nil, nil, fmt.Errorf("repo and path parameters are required")
+	}
+
+	absPath := args.Path
+	if !filepath.IsAbs(absPath) {
+		meta, err := client.GetRepoMeta(ctx, args.Repo)
+		if err != nil || meta == nil {
+			return nil, nil, fmt.Errorf("repo %q not found", args.Repo)
+		}
+		absPath = filepath.Join(meta.RootPath, args.Path)
+	}
+	absPath = filepath.Clean(absPath)
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("file not found: %w", err)
+	}
+
+	lang := indexer.DetectLanguage(absPath)
+	symbols := chunker.ExtractSymbols(string(data), lang)
+
+	if len(symbols) == 0 {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("No symbols found in %s (language: %s)", args.Path, lang)}},
+		}, nil, nil
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "## Symbols in %s:%s\n\n", args.Repo, args.Path)
+	fmt.Fprintf(&sb, "| Name | Kind | Lines |\n")
+	fmt.Fprintf(&sb, "|------|------|-------|\n")
+	for _, sym := range symbols {
+		name := sym.Name
+		if name == "" {
+			name = "(anonymous)"
+		}
+		fmt.Fprintf(&sb, "| %s | %s | %d–%d |\n", name, sym.Kind, sym.StartLine, sym.EndLine)
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
+	}, nil, nil
+}
+
+type reindexParams struct {
+	Repo string `json:"repo" jsonschema:"required,Repository name to re-index"`
+	Full bool   `json:"full" jsonschema:"If true, drop all existing data before indexing (default: incremental)"`
+}
+
+// handleReindexRepo triggers an incremental or full re-index of a registered repository.
+func handleReindexRepo(ctx context.Context, client *db.ChromaClient, args reindexParams) (*mcp.CallToolResult, any, error) {
+	if args.Repo == "" {
+		return nil, nil, fmt.Errorf("repo parameter is required")
+	}
+
+	meta, err := client.GetRepoMeta(ctx, args.Repo)
+	if err != nil || meta == nil {
+		return nil, nil, fmt.Errorf("repo %q not found in index", args.Repo)
+	}
+
+	if args.Full {
+		if err := client.DeleteRepoChunks(ctx, args.Repo); err != nil {
+			log.Printf("[mcp] reindex_repo: delete chunks for %s: %v", args.Repo, err)
+		}
+		if err := client.DeleteRepoFileMeta(ctx, args.Repo); err != nil {
+			log.Printf("[mcp] reindex_repo: delete file meta for %s: %v", args.Repo, err)
+		}
+	}
+
+	idxCfg := indexer.IndexerConfig{
+		RootPath:   meta.RootPath,
+		RepoName:   args.Repo,
+		DB:         client,
+		ChunkFn:    chunker.ChunkFile,
+		SeenHashes: &sync.Map{},
+	}
+
+	stats, err := indexer.RunIndex(ctx, idxCfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reindex failed: %w", err)
+	}
+
+	mode := "incremental"
+	if args.Full {
+		mode = "full"
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "## Reindex Complete: %s (%s)\n\n", args.Repo, mode)
+	fmt.Fprintf(&sb, "| Metric | Value |\n")
+	fmt.Fprintf(&sb, "|--------|-------|\n")
+	fmt.Fprintf(&sb, "| Branch | %s |\n", stats.Branch)
+	fmt.Fprintf(&sb, "| Last Commit | %s |\n", stats.LastCommit)
+	fmt.Fprintf(&sb, "| Files Scanned | %d |\n", stats.FilesScanned)
+	fmt.Fprintf(&sb, "| Files Changed | %d |\n", stats.FilesChanged)
+	fmt.Fprintf(&sb, "| Files Unchanged | %d |\n", stats.FilesUnchanged)
+	fmt.Fprintf(&sb, "| Files Deleted | %d |\n", stats.DeletedFiles)
+	fmt.Fprintf(&sb, "| Chunks Upserted | %d |\n", stats.ChunksUpserted)
+	fmt.Fprintf(&sb, "| Errors | %d |\n", stats.Errors)
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
 	}, nil, nil
 }
 

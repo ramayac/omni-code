@@ -322,3 +322,82 @@ func makeChunk(repo, path, lang, content string, startLine, endLine int, meta ma
 		Metadata:  meta,
 	}
 }
+
+// Symbol represents a top-level AST declaration extracted from a source file.
+type Symbol struct {
+	Name      string
+	Kind      string
+	StartLine int
+	EndLine   int
+}
+
+// langToParser maps canonical language names to their tree-sitter language and top-level kind sets.
+// Returns nil if the language is not supported by tree-sitter.
+func langToParser(lang string) (*sitter.Language, map[string]bool) {
+	switch lang {
+	case "go":
+		return sitter.NewLanguage(tree_sitter_go.Language()), goTopKinds
+	case "javascript":
+		return sitter.NewLanguage(tree_sitter_javascript.Language()), jsTopKinds
+	case "typescript":
+		return sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript()), jsTopKinds
+	case "python":
+		return sitter.NewLanguage(tree_sitter_python.Language()), pyTopKinds
+	case "java":
+		return sitter.NewLanguage(tree_sitter_java.Language()), javaTopKinds
+	case "php":
+		return sitter.NewLanguage(tree_sitter_php.LanguagePHP()), phpTopKinds
+	case "ruby":
+		return sitter.NewLanguage(tree_sitter_ruby.Language()), rubyTopKinds
+	case "html":
+		return sitter.NewLanguage(tree_sitter_html.Language()), htmlTopKinds
+	case "json":
+		return sitter.NewLanguage(tree_sitter_json.Language()), jsonTopKinds
+	default:
+		return nil, nil
+	}
+}
+
+// ExtractSymbols parses source content with tree-sitter and returns all top-level
+// declarations with their name, kind, and line range. Returns an empty slice for
+// unsupported languages or parse errors.
+func ExtractSymbols(content, lang string) []Symbol {
+	language, topKinds := langToParser(lang)
+	if language == nil {
+		return nil
+	}
+
+	parser := sitter.NewParser()
+	defer parser.Close()
+	if err := parser.SetLanguage(language); err != nil {
+		return nil
+	}
+
+	src := []byte(content)
+	tree := parser.Parse(src, nil)
+	if tree == nil {
+		return nil
+	}
+	defer tree.Close()
+
+	root := tree.RootNode()
+	cursor := root.Walk()
+	defer cursor.Close()
+
+	var symbols []Symbol
+	for _, child := range root.NamedChildren(cursor) {
+		if !topKinds[child.Kind()] {
+			continue
+		}
+		sym := Symbol{
+			Kind:      child.Kind(),
+			StartLine: int(child.StartPosition().Row) + 1,
+			EndLine:   int(child.EndPosition().Row) + 1,
+		}
+		if nameNode := child.ChildByFieldName("name"); nameNode != nil {
+			sym.Name = string(src[nameNode.StartByte():nameNode.EndByte()])
+		}
+		symbols = append(symbols, sym)
+	}
+	return symbols
+}

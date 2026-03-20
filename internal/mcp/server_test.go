@@ -260,3 +260,96 @@ func TestCORSMiddleware(t *testing.T) {
 		t.Errorf("expected 204 for OPTIONS, got %d", resp3.StatusCode)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5 tool tests
+// ---------------------------------------------------------------------------
+
+// TestHandleGrep_EmptyPattern verifies that an empty pattern returns an error.
+func TestHandleGrep_EmptyPattern(t *testing.T) {
+	_, _, err := handleGrep(context.Background(), &db.ChromaClient{}, grepParams{})
+	if err == nil {
+		t.Fatal("expected error for empty pattern, got nil")
+	}
+}
+
+// TestHandleGrep_InvalidRegex verifies that a bad regex returns a descriptive error.
+func TestHandleGrep_InvalidRegex(t *testing.T) {
+	_, _, err := handleGrep(context.Background(), &db.ChromaClient{}, grepParams{Pattern: "["})
+	if err == nil {
+		t.Fatal("expected error for invalid regex, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid regex pattern") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+// TestHandleGetFileSymbols_Go reads a real Go file from test-data and verifies
+// that top-level functions are detected. Uses an absolute path to bypass repo lookup.
+func TestHandleGetFileSymbols_Go(t *testing.T) {
+	f, err := os.CreateTemp("", "symbols_test_go*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.WriteString("package main\n\nfunc Alpha() {}\nfunc Beta(x int) {}\n")
+	f.Close()
+
+	// Use the absolute path directly — no ChromaClient lookup needed.
+	res, _, err := handleGetFileSymbols(context.Background(), nil, fileContentParams{
+		Repo: "test-repo",
+		Path: f.Name(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := res.Content[0].(*sdkmcp.TextContent).Text
+	if !strings.Contains(text, "Symbols in") {
+		t.Errorf("expected symbol table header, got: %s", text)
+	}
+	if !strings.Contains(text, "Alpha") || !strings.Contains(text, "Beta") {
+		t.Errorf("expected functions Alpha and Beta, got: %s", text)
+	}
+}
+
+// TestHandleGetFileSymbols_MissingParams verifies required-parameter validation.
+func TestHandleGetFileSymbols_MissingParams(t *testing.T) {
+	_, _, err := handleGetFileSymbols(context.Background(), nil, fileContentParams{Repo: "", Path: ""})
+	if err == nil {
+		t.Fatal("expected error for empty params, got nil")
+	}
+}
+
+// TestHandleReindex_MissingRepo verifies that a missing repo parameter returns an error.
+func TestHandleReindex_MissingRepo(t *testing.T) {
+	_, _, err := handleReindexRepo(context.Background(), &db.ChromaClient{}, reindexParams{})
+	if err == nil {
+		t.Fatal("expected error for empty repo, got nil")
+	}
+}
+
+// TestHandleGetFileSymbols_AbsPath exercises the absolute-path branch with a temp file.
+func TestHandleGetFileSymbols_AbsPath(t *testing.T) {
+	f, err := os.CreateTemp("", "symbols_test*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.WriteString("package main\n\nfunc Hello() {}\nfunc World() {}\n")
+	f.Close()
+
+	res, _, err := handleGetFileSymbols(context.Background(), nil, fileContentParams{
+		Repo: "any",
+		Path: f.Name(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := res.Content[0].(*sdkmcp.TextContent).Text
+	if !strings.Contains(text, "Hello") || !strings.Contains(text, "World") {
+		t.Errorf("expected symbols Hello and World, got:\n%s", text)
+	}
+	if !strings.Contains(text, "function_declaration") {
+		t.Errorf("expected kind 'function_declaration', got:\n%s", text)
+	}
+}
