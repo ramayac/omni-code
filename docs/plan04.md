@@ -45,10 +45,10 @@ Plan for evolving `omni-code` into a high-performance, event-driven development 
 ## Phase 6: MCP Tool Expansion (Git & Diagnostics)
 *Goal: Empower AI agents with deeper repository context.*
 
-- [ ] Implement `git_status`: Show branch, uncommitted changes, and index staleness.
-- [ ] Implement `git_diff`: Show diff between current state and last indexed commit.
-- [ ] Implement `git_log`: Show recent commit history.
-- [ ] Implement `index_status`: Detailed breakdown of when/how each repo was last indexed.
+- [x] Implement `git_status`: Show branch, uncommitted changes, and index staleness.
+- [x] Implement `git_diff`: Show diff between current state and last indexed commit.
+- [x] Implement `git_log`: Show recent commit history.
+- [x] Implement `index_status`: Detailed breakdown of when/how each repo was last indexed.
 
 ## Phase 7: Advanced MCP Tools & Quality of Life
 *Goal: Enhanced discovery and management via protocol tools.*

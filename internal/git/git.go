@@ -106,9 +106,9 @@ func DiffFiles(root, from, to string) (changed, deleted []string, err error) {
 	return changed, deleted, nil
 }
 
-// runGit executes a git command rooted at dir and returns combined stdout.
+// RunGit executes a git command rooted at dir and returns combined stdout.
 // stderr is included in the error message on failure.
-func runGit(dir string, args ...string) (string, error) {
+func RunGit(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -117,6 +117,10 @@ func runGit(dir string, args ...string) (string, error) {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+func runGit(dir string, args ...string) (string, error) {
+	return RunGit(dir, args...)
 }
 
 func splitLines(s string) []string {

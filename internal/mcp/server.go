@@ -12,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ramayac/omni-code/internal/db"
+	"github.com/ramayac/omni-code/internal/git"
 )
 
 // searchParams defines the input schema for the search_codebase tool.
@@ -52,6 +53,34 @@ func ServeStdio(ctx context.Context, client *db.ChromaClient) error {
 		Description: "Read the raw content of a file from disk (max 100 KB).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args fileContentParams) (*mcp.CallToolResult, any, error) {
 		return handleGetFileContent(ctx, client, args)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "git_status",
+		Description: "Show branch, uncommitted changes, and index staleness for a repository.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args repoParams) (*mcp.CallToolResult, any, error) {
+		return handleGitStatus(ctx, client, args)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "git_diff",
+		Description: "Show diff between current state and last indexed commit.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args repoParams) (*mcp.CallToolResult, any, error) {
+		return handleGitDiff(ctx, client, args)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "git_log",
+		Description: "Show recent commit history for a repository.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args repoParams) (*mcp.CallToolResult, any, error) {
+		return handleGitLog(ctx, client, args)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "index_status",
+		Description: "Detailed breakdown of when/how each repo was last indexed.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
+		return handleIndexStatus(ctx, client)
 	})
 
 	log.Printf("[mcp] server starting on stdio")
@@ -226,5 +255,103 @@ func handleGetFileContent(ctx context.Context, client *db.ChromaClient, args fil
 		Content: []mcp.Content{&mcp.TextContent{
 			Text: fmt.Sprintf("```%s\n%s\n```", ext, string(data)),
 		}},
+	}, nil, nil
+}
+
+type repoParams struct {
+	Repo string `json:"repo" jsonschema:"required,Repository name"`
+}
+
+func handleGitStatus(ctx context.Context, client *db.ChromaClient, args repoParams) (*mcp.CallToolResult, any, error) {
+	if args.Repo == "" {
+		return nil, nil, fmt.Errorf("repo parameter is required")
+	}
+	meta, err := client.GetRepoMeta(ctx, args.Repo)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get repo meta: %w", err)
+	}
+
+	out, err := git.RunGit(meta.RootPath, "status", "--short", "--branch")
+	if err != nil {
+		return nil, nil, fmt.Errorf("git status: %w", err)
+	}
+
+	headCommit, _ := git.HeadCommit(meta.RootPath)
+	stalenessLine := fmt.Sprintf("\n[Index Staleness]\nLast Indexed Commit: %s\nCurrent HEAD:        %s", meta.LastIndexedCommit, headCommit)
+	if headCommit != meta.LastIndexedCommit {
+		stalenessLine += "\nStatus: STALE (Needs re-indexing)"
+	} else {
+		stalenessLine += "\nStatus: UP TO DATE"
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: strings.TrimSpace(out) + "\n" + stalenessLine}},
+	}, nil, nil
+}
+
+func handleGitDiff(ctx context.Context, client *db.ChromaClient, args repoParams) (*mcp.CallToolResult, any, error) {
+	if args.Repo == "" {
+		return nil, nil, fmt.Errorf("repo parameter is required")
+	}
+	meta, err := client.GetRepoMeta(ctx, args.Repo)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get repo meta: %w", err)
+	}
+
+	out, err := git.RunGit(meta.RootPath, "diff", meta.LastIndexedCommit, "HEAD")
+	if err != nil {
+		return nil, nil, fmt.Errorf("git diff: %w", err)
+	}
+
+	if strings.TrimSpace(out) == "" {
+		out = "No diff between HEAD and last indexed commit (" + meta.LastIndexedCommit + ")"
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: out}},
+	}, nil, nil
+}
+
+func handleGitLog(ctx context.Context, client *db.ChromaClient, args repoParams) (*mcp.CallToolResult, any, error) {
+	if args.Repo == "" {
+		return nil, nil, fmt.Errorf("repo parameter is required")
+	}
+	meta, err := client.GetRepoMeta(ctx, args.Repo)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get repo meta: %w", err)
+	}
+
+	// Show last 10 commits
+	out, err := git.RunGit(meta.RootPath, "log", "-n", "10", "--oneline")
+	if err != nil {
+		return nil, nil, fmt.Errorf("git log: %w", err)
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: out}},
+	}, nil, nil
+}
+
+func handleIndexStatus(ctx context.Context, client *db.ChromaClient) (*mcp.CallToolResult, any, error) {
+	metas, err := client.ListRepoMeta(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list repos: %w", err)
+	}
+
+	if len(metas) == 0 {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "No repositories indexed yet."}},
+		}, nil, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("| Repo | Mode | Duration (ms) | Last Indexed At |\n")
+	sb.WriteString("|------|------|---------------|-----------------|\n")
+	for _, m := range metas {
+		fmt.Fprintf(&sb, "| %s | %s | %d | %s |\n", m.Repo, m.IndexMode, m.DurationMs, m.LastIndexedAt)
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
 	}, nil, nil
 }
