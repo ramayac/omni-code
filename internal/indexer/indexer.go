@@ -355,6 +355,42 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 		}()
 	}
 
+	// Progress reporter: every 5 s emit a scanned/total line to stderr.
+	// totalFiles is known only in git-list mode (fileList != nil); -1 means unknown.
+	totalFiles := -1
+	if fileList != nil {
+		totalFiles = len(fileList)
+	}
+	stopProgress := make(chan struct{})
+	var progressWg sync.WaitGroup
+	progressWg.Add(1)
+	go func() {
+		defer progressWg.Done()
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				mu.Lock()
+				scanned := stats.FilesScanned
+				mu.Unlock()
+				if totalFiles >= 0 {
+					pct := 0
+					if totalFiles > 0 {
+						pct = scanned * 100 / totalFiles
+					}
+					log.Printf("[indexer] %s: %d/%d files (%d%%)", cfg.RepoName, scanned, totalFiles, pct)
+				} else {
+					log.Printf("[indexer] %s: %d files scanned", cfg.RepoName, scanned)
+				}
+			case <-stopProgress:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	var feedErr error
 
 	if fileList != nil {
@@ -414,6 +450,8 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 
 	close(workCh)
 	wg.Wait()
+	close(stopProgress)
+	progressWg.Wait()
 	mu.Lock()
 	flushLocked()
 	mu.Unlock()
