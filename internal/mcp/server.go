@@ -120,6 +120,21 @@ func buildServer(client *db.ChromaClient) *mcp.Server {
 		return handleGetRepoSummary(ctx, client, args)
 	})
 
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "search_repo_summaries",
+		Description: "List all indexed repositories with a compact summary of each (language breakdown, file count, recent activity). Use this to identify which repo to target for a task.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
+		return handleSearchRepoSummaries(ctx, client)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_top_contributors",
+		Description: "Return a ranked leaderboard of git contributors for a repository.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args topContributorsParams) (*mcp.CallToolResult, any, error) {
+		return handleGetTopContributors(ctx, client, args)
+	})
+
 	return s
 }
 
@@ -831,6 +846,147 @@ sb.WriteString("```\n")
 sb.WriteString(strings.TrimSpace(gitOut))
 sb.WriteString("\n```\n")
 }
+}
+
+return &mcp.CallToolResult{
+Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
+}, nil, nil
+}
+
+// ---------------------------------------------------------------------------
+// search_repo_summaries handler
+// ---------------------------------------------------------------------------
+
+// handleSearchRepoSummaries returns a compact Markdown card for every indexed
+// repository so the AI can quickly identify which repo to target for a task.
+func handleSearchRepoSummaries(ctx context.Context, client *db.ChromaClient) (*mcp.CallToolResult, any, error) {
+metas, err := client.ListRepoMeta(ctx)
+if err != nil {
+return nil, nil, fmt.Errorf("list repos: %w", err)
+}
+if len(metas) == 0 {
+return &mcp.CallToolResult{
+Content: []mcp.Content{&mcp.TextContent{Text: "No repositories indexed yet."}},
+}, nil, nil
+}
+
+var sb strings.Builder
+sb.WriteString("# All Repository Summaries\n\n")
+
+for _, meta := range metas {
+files, err := client.QueryAllFileMeta(ctx, meta.Repo)
+if err != nil {
+log.Printf("[mcp] search_repo_summaries: list files for %s: %v", meta.Repo, err)
+}
+
+// Build language distribution (top 3 languages only for brevity).
+langCount := make(map[string]int)
+for _, f := range files {
+lang := indexer.DetectLanguage(f.Path)
+if lang == "" {
+lang = "other"
+}
+langCount[lang]++
+}
+type langEntry struct {
+lang  string
+count int
+}
+langs := make([]langEntry, 0, len(langCount))
+for l, c := range langCount {
+langs = append(langs, langEntry{l, c})
+}
+for i := 1; i < len(langs); i++ {
+for j := i; j > 0 && langs[j].count > langs[j-1].count; j-- {
+langs[j], langs[j-1] = langs[j-1], langs[j]
+}
+}
+topLangs := make([]string, 0, 3)
+for i, e := range langs {
+if i >= 3 {
+break
+}
+topLangs = append(topLangs, fmt.Sprintf("%s(%d)", e.lang, e.count))
+}
+
+commit := meta.LastIndexedCommit
+if len(commit) > 8 {
+commit = commit[:8]
+}
+fmt.Fprintf(&sb, "## %s\n", meta.Repo)
+fmt.Fprintf(&sb, "- **Branch**: %s  **Commit**: %s\n", meta.CurrentBranch, commit)
+fmt.Fprintf(&sb, "- **Files**: %d  **Chunks**: %d\n", meta.FileCount, meta.ChunkCount)
+if len(topLangs) > 0 {
+fmt.Fprintf(&sb, "- **Languages**: %s\n", strings.Join(topLangs, ", "))
+}
+fmt.Fprintf(&sb, "- **Last Indexed**: %s\n\n", meta.LastIndexedAt)
+}
+
+return &mcp.CallToolResult{
+Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
+}, nil, nil
+}
+
+// ---------------------------------------------------------------------------
+// get_top_contributors handler
+// ---------------------------------------------------------------------------
+
+type topContributorsParams struct {
+Repo  string `json:"repo"  jsonschema:"required,Repository name"`
+Since string `json:"since" jsonschema:"Optional time window for git shortlog (e.g. '6 months ago', '2026-01-01')"`
+}
+
+// handleGetTopContributors returns a ranked contributor leaderboard for a repository.
+func handleGetTopContributors(ctx context.Context, client *db.ChromaClient, args topContributorsParams) (*mcp.CallToolResult, any, error) {
+if args.Repo == "" {
+return nil, nil, fmt.Errorf("repo parameter is required")
+}
+
+meta, err := client.GetRepoMeta(ctx, args.Repo)
+if err != nil || meta == nil {
+return nil, nil, fmt.Errorf("repo %q not found in index", args.Repo)
+}
+
+gitArgs := []string{"shortlog", "-sn", "--no-merges", "HEAD"}
+if args.Since != "" {
+gitArgs = append(gitArgs, "--since="+args.Since)
+}
+
+out, err := git.RunGit(meta.RootPath, gitArgs...)
+if err != nil {
+return nil, nil, fmt.Errorf("git shortlog: %w", err)
+}
+
+lines := strings.Split(strings.TrimSpace(out), "\n")
+if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+return &mcp.CallToolResult{
+Content: []mcp.Content{&mcp.TextContent{Text: "No contributors found."}},
+}, nil, nil
+}
+
+var sb strings.Builder
+title := fmt.Sprintf("## Top Contributors: %s", args.Repo)
+if args.Since != "" {
+title += fmt.Sprintf(" (since %s)", args.Since)
+}
+fmt.Fprintln(&sb, title)
+fmt.Fprintln(&sb)
+sb.WriteString("| Rank | Commits | Author |\n")
+sb.WriteString("|------|---------|--------|\n")
+
+for i, line := range lines {
+line = strings.TrimSpace(line)
+if line == "" {
+continue
+}
+// git shortlog -sn output format: "   42\tAuthor Name"
+parts := strings.SplitN(line, "\t", 2)
+if len(parts) != 2 {
+continue
+}
+commits := strings.TrimSpace(parts[0])
+author := strings.TrimSpace(parts[1])
+fmt.Fprintf(&sb, "| %d | %s | %s |\n", i+1, commits, author)
 }
 
 return &mcp.CallToolResult{

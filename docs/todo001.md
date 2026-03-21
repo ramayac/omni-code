@@ -38,29 +38,22 @@ Replace or augment the polling loop in `watch` mode with filesystem event hooks:
 
 ## Medium Priority
 
-### MT-1 — Batch Flush for Indexer (plan000 Phase 2)
+### MT-1 — Batch Flush for Indexer (plan000 Phase 2) ✅ already implemented
 
-The current indexer calls ChromaDB once per file. Batch upserts should significantly reduce round-trips during large initial ingestions:
-
-- [ ] Buffer chunk upserts and file-meta upserts in-memory
-- [ ] Flush to ChromaDB every 50 files (or at end of run)
-- [ ] Cap batch array size to avoid oversized HTTP payloads
-- [ ] Refactor `OllamaEmbedder` to issue batch embed calls using `errgroup` for concurrency
+The indexer already buffers upserts (`fileMetaFlushSize=50`, `chunkFlushSize=500`, `flushLocked()`). No further work needed.
 
 ---
 
-### MT-2 — Progress Reporting during Indexing (plan000 Phase 2)
+### MT-2 — Progress Reporting during Indexing (plan000 Phase 2) ✅
 
-- [ ] Emit percentage progress lines to stderr (e.g. `[indexer] 42/210 files (20%)`) during large runs
+- [x] Emit progress lines to stderr every 5 s: `[indexer] <repo>: 42/210 files (20%)` in git-list mode or `[indexer] <repo>: N files scanned` in WalkDir mode
 - [ ] Expose a structured progress event that watch mode can surface in logs
 
 ---
 
-### MT-3 — `search_repo_summaries` MCP Tool (plan000 Phase 4)
+### MT-3 — `search_repo_summaries` MCP Tool (plan000 Phase 4) ✅
 
-Companion to `get_repo_summary` (already implemented). Let the AI search across structural summaries of all repos to find the best one for a task:
-
-- [ ] Implement `search_repo_summaries` tool that accepts a natural-language query and returns a ranked list of repos with their summaries
+- [x] Implement `search_repo_summaries` tool — returns a compact Markdown card (branch, commit, file/chunk counts, top-3 languages) for every indexed repo
 
 ---
 
@@ -88,13 +81,11 @@ New tool to produce a tailored `AGENTS.md` file for any indexed repository:
 
 ---
 
-### LP-3 — `get_top_contributors` MCP Tool
+### LP-3 — `get_top_contributors` MCP Tool ✅
 
-New tool exposing contributor leaderboard for a repository:
-
-- [ ] Run `git shortlog -sn --no-merges HEAD` via `git.RunGit`
-- [ ] Parse and return formatted Markdown table (Rank | Author | Commits)
-- [ ] Add optional `--since` flag to scope to recent window
+- [x] Run `git shortlog -sn --no-merges HEAD` via `git.RunGit`
+- [x] Parse and return formatted Markdown table (Rank | Author | Commits)
+- [x] Support optional `since` parameter to scope to a recent time window
 
 ---
 
