@@ -1,5 +1,6 @@
 .PHONY: help build test dev docker-db docker-db-start stop-db rm-db clean fmt vet tidy \
-	reset-db reset-repo reindex reindex-repo estimate backup-db restore-db status
+	reset-db reset-repo reindex reindex-repo estimate backup-db restore-db status \
+	init-config query chat
 
 # Show this help message
 help:
@@ -94,6 +95,27 @@ tidy:
 # Estimate and print sorted scan complexity without indexing
 estimate: build
 	./bin/omni-code index --config repos.yaml --dry-run
+
+# Create repos.yaml from example template (refuses if file already exists)
+init-config:
+	@if [ -f repos.yaml ]; then \
+		echo "\033[33m[warn]\033[0m repos.yaml already exists — not overwriting."; \
+		echo "       Edit it directly or remove it first."; \
+	else \
+		cp repos-example.yaml repos.yaml; \
+		echo "[init] created repos.yaml from repos-example.yaml — edit it with your repos."; \
+	fi
+
+# Run a search query; usage: make query Q="how does change detection work"
+query: build
+ifndef Q
+	$(error Q is not set. Usage: make query Q="how does change detection work")
+endif
+	./bin/omni-code search --query "$(Q)" --hybrid
+
+# Start interactive chat session (OpenAI-compatible endpoint)
+chat: build
+	./bin/omni-code chat --config repos.yaml
 
 # Start MCP locally
 mcp: build

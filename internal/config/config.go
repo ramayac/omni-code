@@ -16,6 +16,9 @@ const (
 	EnvEmbeddingBackendAlias = "OMNI_EMBEDDING_BACKEND"
 	EnvEmbeddingModelAlias   = "OMNI_EMBEDDING_MODEL"
 	EnvEmbeddingURLAlias     = "OMNI_EMBEDDING_URL"
+
+	EnvChatAPIURL = "OMNI_CHAT_API_URL"
+	EnvChatModel  = "OMNI_CHAT_MODEL"
 )
 
 // Config is the top-level structure of repos.yaml.
@@ -29,8 +32,11 @@ type Config struct {
 	SkipExtensionsExtra []string `yaml:"skip_extensions_extra"`
 	SkipFilenamesExtra  []string `yaml:"skip_filenames_extra"`
 	// SkipIfWrongBranch stops scanning/indexing if the repo is not on the expected branch.
-	SkipIfWrongBranch bool        `yaml:"skip_if_wrong_branch"`
-	Repos             []RepoEntry `yaml:"repos"`
+	SkipIfWrongBranch bool `yaml:"skip_if_wrong_branch"`
+	// Chat mode configuration.
+	ChatAPIURL string      `yaml:"chat_api_url"`
+	ChatModel  string      `yaml:"chat_model"`
+	Repos      []RepoEntry `yaml:"repos"`
 }
 
 // RepoEntry describes a single repository to be indexed.
@@ -126,6 +132,22 @@ func ResolveConfig(base *Config, cliDB, cliEmbeddingBackend, cliEmbeddingModel, 
 	}
 	if cliEmbeddingURL != "" {
 		resolved.EmbeddingURL = cliEmbeddingURL
+	}
+
+	// Chat settings: yaml -> env.
+	if base != nil {
+		if base.ChatAPIURL != "" {
+			resolved.ChatAPIURL = base.ChatAPIURL
+		}
+		if base.ChatModel != "" {
+			resolved.ChatModel = base.ChatModel
+		}
+	}
+	if v := firstEnv(EnvChatAPIURL); v != "" {
+		resolved.ChatAPIURL = v
+	}
+	if v := firstEnv(EnvChatModel); v != "" {
+		resolved.ChatModel = v
 	}
 
 	return resolved

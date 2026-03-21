@@ -16,6 +16,7 @@ import (
 
 	defaultef "github.com/amikos-tech/chroma-go/pkg/embeddings/default_ef"
 
+	"github.com/ramayac/omni-code/internal/chat"
 	"github.com/ramayac/omni-code/internal/chunker"
 	"github.com/ramayac/omni-code/internal/config"
 	"github.com/ramayac/omni-code/internal/db"
@@ -40,6 +41,8 @@ func main() {
 		runIndex(os.Args[2:])
 	case "search":
 		runSearch(os.Args[2:])
+	case "chat":
+		runChat(os.Args[2:])
 	case "mcp":
 		runMCP(os.Args[2:])
 	case "repos":
@@ -66,6 +69,7 @@ Usage:
 Commands:
   index   Scan and index repositories into ChromaDB
   search  Query indexed code from the terminal
+  chat    Interactive AI chat with tool access to your codebases
   mcp     Start the MCP server (stdio, SSE, or streamable HTTP)
   repos   Manage the repository registry (list / add / remove)
   reset   Drop indexed data (--all or --repo <name>)
@@ -413,6 +417,86 @@ func runSearch(args []string) {
 	for i, r := range results {
 		fmt.Printf("## %d. %s:%s (lines %d\u2013%d)\n", i+1, r.Repo, r.Path, r.StartLine, r.EndLine)
 		fmt.Printf("```%s\n%s\n```\n\n", r.Language, r.Content)
+	}
+}
+
+func runChat(args []string) {
+	fs := flag.NewFlagSet("chat", flag.ExitOnError)
+	dbURL := fs.String("db", "", "ChromaDB base URL")
+	cfgPath := fs.String("config", "", "path to repos.yaml config file")
+	apiURL := fs.String("api-url", "", "OpenAI-compatible API base URL (e.g. https://api.openai.com/v1)")
+	model := fs.String("model", "", "chat model name (e.g. gpt-4o, llama3)")
+	verbose := fs.Bool("verbose", false, "enable verbose logging")
+	quiet := fs.Bool("quiet", false, "suppress all log output")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, `Usage: omni-code chat [flags]
+
+Interactive AI chat with tool access to your indexed codebases.
+Requires an OpenAI-compatible API endpoint.
+
+Configure via repos.yaml (chat_api_url, chat_model), environment
+variables (OMNI_CHAT_API_URL, OMNI_CHAT_MODEL), or CLI flags.
+
+Flags:
+`)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+	applyLogFlags(*verbose, *quiet)
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	fileCfg, err := config.LoadOrDefault(*cfgPath)
+	if err != nil {
+		log.Fatalf("[chat] load config: %v", err)
+	}
+	runtimeCfg := config.ResolveConfig(fileCfg, *dbURL, "", "", "")
+
+	// Resolve chat API URL: flag -> config (resolved from yaml + env).
+	chatURL := *apiURL
+	if chatURL == "" {
+		chatURL = runtimeCfg.ChatAPIURL
+	}
+	if chatURL == "" {
+		fmt.Fprintln(os.Stderr, "error: chat API URL is required")
+		fmt.Fprintln(os.Stderr, "Set via --api-url, chat_api_url in repos.yaml, or OMNI_CHAT_API_URL env var")
+		os.Exit(1)
+	}
+
+	chatModel := *model
+	if chatModel == "" {
+		chatModel = runtimeCfg.ChatModel
+	}
+	if chatModel == "" {
+		fmt.Fprintln(os.Stderr, "error: chat model is required")
+		fmt.Fprintln(os.Stderr, "Set via --model, chat_model in repos.yaml, or OMNI_CHAT_MODEL env var")
+		os.Exit(1)
+	}
+
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		apiKey = os.Getenv("OMNI_CHAT_API_KEY")
+	}
+
+	log.Printf("[chat] connecting to ChromaDB at %s", runtimeCfg.DB)
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, runtimeCfg.EmbeddingBackend, runtimeCfg.EmbeddingModel, runtimeCfg.EmbeddingURL)
+	if err != nil {
+		log.Fatalf("[chat] %v", err)
+	}
+
+	chatClient := &chat.Client{
+		BaseURL: chatURL,
+		Model:   chatModel,
+		APIKey:  apiKey,
+	}
+	tools := chat.BuildToolRegistry(client)
+
+	log.Printf("[chat] using %s model=%s", chatURL, chatModel)
+	if err := chat.RunREPL(ctx, chatClient, tools); err != nil {
+		log.Fatalf("[chat] %v", err)
 	}
 }
 
