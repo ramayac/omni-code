@@ -30,7 +30,7 @@ func setupClient(t *testing.T) (*ChromaClient, func()) {
 	t.Helper()
 	ctx := context.Background()
 
-	c, err := NewChromaClient(ctx, chromaURL())
+	c, err := NewChromaClient(ctx, chromaURL(), ":memory:")
 	if err != nil {
 		t.Fatalf("NewChromaClient: %v", err)
 	}
@@ -52,7 +52,7 @@ func setupClient(t *testing.T) (*ChromaClient, func()) {
 func TestNewChromaClient(t *testing.T) {
 	skipIfNoChroma(t)
 	ctx := context.Background()
-	c, err := NewChromaClient(ctx, chromaURL())
+	c, err := NewChromaClient(ctx, chromaURL(), ":memory:")
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestNewChromaClient(t *testing.T) {
 
 func TestNewChromaClient_Unreachable(t *testing.T) {
 	ctx := context.Background()
-	_, err := NewChromaClient(ctx, "http://127.0.0.1:19999")
+	_, err := NewChromaClient(ctx, "http://127.0.0.1:19999", ":memory:")
 	if err == nil {
 		t.Fatal("expected error for unreachable server, got nil")
 	}
@@ -293,7 +293,7 @@ func TestRepoMeta(t *testing.T) {
 		t.Skip("CHROMA_URL not set; skipping RepoMeta integration test")
 	}
 
-	client, err := NewChromaClient(context.Background(), os.Getenv("CHROMA_URL"))
+	client, err := NewChromaClient(context.Background(), os.Getenv("CHROMA_URL"), ":memory:")
 	if err != nil {
 		t.Fatalf("NewChromaClient: %v", err)
 	}

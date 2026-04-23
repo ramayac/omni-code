@@ -288,7 +288,7 @@ func TestRunIndex_GitIncremental(t *testing.T) {
 		t.Skip("CHROMA_URL not set; skipping integration test")
 	}
 	ctx := context.Background()
-	client, err := db.NewChromaClient(ctx, os.Getenv("CHROMA_URL"))
+	client, err := db.NewChromaClient(ctx, os.Getenv("CHROMA_URL"), ":memory:")
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
