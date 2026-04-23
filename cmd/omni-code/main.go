@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"os/signal"
 	"strings"
 	"sync"
@@ -91,8 +92,8 @@ func applyLogFlags(verbose, quiet bool) {
 
 // newClientAndCollections creates a ChromaClient and ensures all collections exist.
 // If embBackend is non-empty and not "chroma-default", an external embedder is wired in.
-func newClientAndCollections(ctx context.Context, baseURL, embBackend, embModel, embURL string) (*db.ChromaClient, error) {
-	client, err := db.NewChromaClient(ctx, baseURL)
+func newClientAndCollections(ctx context.Context, baseURL, sqlitePath, embBackend, embModel, embURL string) (*db.ChromaClient, error) {
+	client, err := db.NewChromaClient(ctx, baseURL, sqlitePath)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +172,7 @@ func runIndex(args []string) {
 	runtimeCfg := config.ResolveConfig(fileCfg, *dbURL, *embBackend, *embModel, *embURL)
 
 	log.Printf("[index] connecting to ChromaDB at %s", runtimeCfg.DB)
-	client, err := newClientAndCollections(ctx, runtimeCfg.DB, runtimeCfg.EmbeddingBackend, runtimeCfg.EmbeddingModel, runtimeCfg.EmbeddingURL)
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, sqlitePath(cfgPath), runtimeCfg.EmbeddingBackend, runtimeCfg.EmbeddingModel, runtimeCfg.EmbeddingURL)
 	if err != nil {
 		log.Fatalf("[index] %v", err)
 	}
@@ -378,7 +379,7 @@ func runSearch(args []string) {
 		log.Fatalf("[search] load config: %v", err)
 	}
 	runtimeCfg := config.ResolveConfig(fileCfg, *dbURL, "", "", "")
-	client, err := newClientAndCollections(ctx, runtimeCfg.DB, "", "", "")
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, sqlitePath(cfgPath), "", "", "")
 	if err != nil {
 		log.Fatalf("[search] %v", err)
 	}
@@ -482,7 +483,7 @@ Flags:
 	}
 
 	log.Printf("[chat] connecting to ChromaDB at %s", runtimeCfg.DB)
-	client, err := newClientAndCollections(ctx, runtimeCfg.DB, runtimeCfg.EmbeddingBackend, runtimeCfg.EmbeddingModel, runtimeCfg.EmbeddingURL)
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, sqlitePath(cfgPath), runtimeCfg.EmbeddingBackend, runtimeCfg.EmbeddingModel, runtimeCfg.EmbeddingURL)
 	if err != nil {
 		log.Fatalf("[chat] %v", err)
 	}
@@ -537,7 +538,7 @@ Examples:
 		log.Fatalf("[mcp] load config: %v", err)
 	}
 	runtimeCfg := config.ResolveConfig(fileCfg, *dbURL, "", "", "")
-	client, err := newClientAndCollections(ctx, runtimeCfg.DB, "", "", "")
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, sqlitePath(cfgPath), "", "", "")
 	if err != nil {
 		log.Fatalf("[mcp] %v", err)
 	}
@@ -588,7 +589,7 @@ func reposList(args []string) {
 		log.Fatalf("[repos] load config: %v", err)
 	}
 	runtimeCfg := config.ResolveConfig(fileCfg, *dbURL, "", "", "")
-	client, err := newClientAndCollections(ctx, runtimeCfg.DB, "", "", "")
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, sqlitePath(cfgPath), "", "", "")
 	if err != nil {
 		log.Fatalf("[repos] %v", err)
 	}
@@ -702,7 +703,7 @@ func reposRemove(args []string) {
 
 	ctx := context.Background()
 	runtimeCfg := config.ResolveConfig(cfg, *dbURL, "", "", "")
-	client, err := newClientAndCollections(ctx, runtimeCfg.DB, "", "", "")
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, sqlitePath(cfgPath), "", "", "")
 	if err != nil {
 		log.Fatalf("[repos remove] db connect: %v", err)
 	}
@@ -735,7 +736,7 @@ func runReset(args []string) {
 		log.Fatalf("[reset] load config: %v", err)
 	}
 	runtimeCfg := config.ResolveConfig(fileCfg, *dbURL, "", "", "")
-	client, err := newClientAndCollections(ctx, runtimeCfg.DB, "", "", "")
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, sqlitePath(cfgPath), "", "", "")
 	if err != nil {
 		log.Fatalf("[reset] %v", err)
 	}
@@ -858,7 +859,7 @@ func runWatch(args []string) {
 	defer stop()
 
 	runtimeCfg := config.ResolveConfig(cfg, *dbURL, *embBackend, *embModel, *embURL)
-	client, err := newClientAndCollections(ctx, runtimeCfg.DB, runtimeCfg.EmbeddingBackend, runtimeCfg.EmbeddingModel, runtimeCfg.EmbeddingURL)
+	client, err := newClientAndCollections(ctx, runtimeCfg.DB, sqlitePath(cfgPath), runtimeCfg.EmbeddingBackend, runtimeCfg.EmbeddingModel, runtimeCfg.EmbeddingURL)
 	if err != nil {
 		log.Fatalf("[watch] %v", err)
 	}
@@ -915,4 +916,13 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func sqlitePath(cfgPath *string) string {
+	if cfgPath == nil || *cfgPath == "" {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".omni-code", "metadata.db")
+	}
+	dir := filepath.Dir(*cfgPath)
+	return filepath.Join(dir, "omni-code-meta.db")
 }
