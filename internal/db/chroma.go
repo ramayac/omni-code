@@ -78,14 +78,14 @@ type FileMeta struct {
 // ChromaClient wraps the ChromaDB HTTP client and manages collections.
 type ChromaClient struct {
 	client      chromadb.Client
-	files       chromadb.Collection
+
 	chunks      chromadb.Collection
-	repos       chromadb.Collection
+	sqlite      *sqliteDB
 	extEmbedder embedder.Embedder // nil = use ChromaDB built-in EF
 }
 
 // NewChromaClient creates a new ChromaClient, pings the server, and returns the wrapper.
-func NewChromaClient(ctx context.Context, baseURL string) (*ChromaClient, error) {
+func NewChromaClient(ctx context.Context, baseURL string, sqlitePath string) (*ChromaClient, error) {
 	client, err := chromadb.NewHTTPClient(
 		chromadb.WithBaseURL(baseURL),
 	)
@@ -95,43 +95,37 @@ func NewChromaClient(ctx context.Context, baseURL string) (*ChromaClient, error)
 	if err := client.Heartbeat(ctx); err != nil {
 		return nil, fmt.Errorf("chroma server unreachable at %s: %w", baseURL, err)
 	}
-	return &ChromaClient{client: client}, nil
+	sqlite, err := initSQLite(sqlitePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to init sqlite db: %w", err)
+	}
+	return &ChromaClient{client: client, sqlite: sqlite}, nil
 }
 
 // EnsureCollections creates or retrieves the `files`, `chunks`, and `repos`
 // collections. ef is the embedding function for the chunks collection; pass
 // nil to skip setting a server-side EF (use when providing external embeddings).
 func (c *ChromaClient) EnsureCollections(ctx context.Context, ef embeddings.EmbeddingFunction) error {
-	var err error
-	c.files, err = c.client.GetOrCreateCollection(ctx, "files",
-		chromadb.WithIfNotExistsCreate(),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to ensure 'files' collection: %w", err)
-	}
-
 	chunkOpts := []chromadb.CreateCollectionOption{chromadb.WithIfNotExistsCreate()}
 	if ef != nil {
 		chunkOpts = append(chunkOpts, chromadb.WithEmbeddingFunctionCreate(ef))
 	}
+	var err error
 	c.chunks, err = c.client.GetOrCreateCollection(ctx, "chunks", chunkOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to ensure 'chunks' collection: %w", err)
 	}
 
-	c.repos, err = c.client.GetOrCreateCollection(ctx, "repos",
-		chromadb.WithIfNotExistsCreate(),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to ensure 'repos' collection: %w", err)
-	}
 	return nil
 }
 
 // ResetAllCollections drops and recreates the files, chunks, and repos
 // collections. ef is the embedding function for the chunks collection.
 func (c *ChromaClient) ResetAllCollections(ctx context.Context, ef embeddings.EmbeddingFunction) error {
-	for _, name := range []string{"files", "chunks", "repos"} {
+	if err := c.sqlite.resetAll(ctx); err != nil {
+		log.Printf("[db] sqlite reset error: %v", err)
+	}
+	for _, name := range []string{"chunks"} {
 		if err := c.client.DeleteCollection(ctx, name); err != nil {
 			log.Printf("[db] delete collection %q: %v (may not exist, continuing)", name, err)
 		}
@@ -146,85 +140,14 @@ func (c *ChromaClient) SetEmbedder(e embedder.Embedder) {
 }
 
 // fileDocID returns the stable document ID used in the `files` collection.
-func fileDocID(repo, path string) chromadb.DocumentID {
-	return chromadb.DocumentID(repo + "::" + path)
-}
 
 // GetFileMeta retrieves stored change-detection metadata for a file.
 // Returns nil (no error) if the file has not been indexed yet.
-func (c *ChromaClient) GetFileMeta(ctx context.Context, repo, path string) (*FileMeta, error) {
-	result, err := c.files.Get(ctx,
-		chromadb.WithIDsGet(fileDocID(repo, path)),
-		chromadb.WithIncludeGet(chromadb.IncludeMetadatas),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get file meta for %s/%s: %w", repo, path, err)
-	}
-	ids := result.GetIDs()
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	metas := result.GetMetadatas()
-	if len(metas) == 0 || metas[0] == nil {
-		return nil, nil
-	}
-	meta := metas[0]
-	fm := &FileMeta{Repo: repo, Path: path}
-	fm.Size, _ = meta.GetInt("size")
-	fm.MTime, _ = meta.GetInt("mtime")
-	fm.Hash, _ = meta.GetString("hash")
-	return fm, nil
-}
 
 // UpsertFileMeta stores or updates a file's change-detection metadata.
 // No text or embedding is stored — the files collection is metadata-only.
-func (c *ChromaClient) UpsertFileMeta(ctx context.Context, repo, path string, size, mtime int64, hash string) error {
-	docMeta := chromadb.NewDocumentMetadata(
-		chromadb.NewStringAttribute("repo", repo),
-		chromadb.NewStringAttribute("path", path),
-		chromadb.NewStringAttribute("hash", hash),
-		chromadb.NewIntAttribute("size", size),
-		chromadb.NewIntAttribute("mtime", mtime),
-	)
-	err := c.files.Upsert(ctx,
-		chromadb.WithIDs(fileDocID(repo, path)),
-		chromadb.WithTexts(path),
-		chromadb.WithMetadatas(docMeta),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to upsert file meta for %s/%s: %w", repo, path, err)
-	}
-	return nil
-}
 
 // UpsertBatchFileMeta stores or updates file metadata in one request.
-func (c *ChromaClient) UpsertBatchFileMeta(ctx context.Context, metas []FileMeta) error {
-	if len(metas) == 0 {
-		return nil
-	}
-	ids := make([]chromadb.DocumentID, len(metas))
-	texts := make([]string, len(metas))
-	docMetas := make([]chromadb.DocumentMetadata, len(metas))
-	for i, fm := range metas {
-		ids[i] = fileDocID(fm.Repo, fm.Path)
-		texts[i] = fm.Path
-		docMetas[i] = chromadb.NewDocumentMetadata(
-			chromadb.NewStringAttribute("repo", fm.Repo),
-			chromadb.NewStringAttribute("path", fm.Path),
-			chromadb.NewStringAttribute("hash", fm.Hash),
-			chromadb.NewIntAttribute("size", fm.Size),
-			chromadb.NewIntAttribute("mtime", fm.MTime),
-		)
-	}
-	if err := c.files.Upsert(ctx,
-		chromadb.WithIDs(ids...),
-		chromadb.WithTexts(texts...),
-		chromadb.WithMetadatas(docMetas...),
-	); err != nil {
-		return fmt.Errorf("failed to upsert %d file metas: %w", len(metas), err)
-	}
-	return nil
-}
 
 // UpsertChunks batch-upserts code/text chunks into the `chunks` collection.
 // When an external embedder is configured (SetEmbedder), embeddings are computed
@@ -291,15 +214,6 @@ func (c *ChromaClient) DeleteFileChunks(ctx context.Context, repo, path string) 
 }
 
 // DeleteFileMeta removes the change-detection metadata for a single file.
-func (c *ChromaClient) DeleteFileMeta(ctx context.Context, repo, path string) error {
-	err := c.files.Delete(ctx,
-		chromadb.WithIDsDelete(fileDocID(repo, path)),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to delete file meta for %s/%s: %w", repo, path, err)
-	}
-	return nil
-}
 
 // DeleteRepoChunks removes all chunks for every file in a repository.
 func (c *ChromaClient) DeleteRepoChunks(ctx context.Context, repo string) error {
@@ -313,161 +227,23 @@ func (c *ChromaClient) DeleteRepoChunks(ctx context.Context, repo string) error 
 }
 
 // DeleteRepoFileMeta removes the change-detection metadata for all files in a repo.
-func (c *ChromaClient) DeleteRepoFileMeta(ctx context.Context, repo string) error {
-	err := c.files.Delete(ctx,
-		chromadb.WithWhereDelete(chromadb.EqString("repo", repo)),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to delete file metas for repo %s: %w", repo, err)
-	}
-	return nil
-}
 
 // QueryAllFileMeta returns the change-detection metadata for all indexed files
 // belonging to the given repository.
-func (c *ChromaClient) QueryAllFileMeta(ctx context.Context, repo string) ([]FileMeta, error) {
-	result, err := c.files.Get(ctx,
-		chromadb.WithWhereGet(chromadb.EqString("repo", repo)),
-		chromadb.WithIncludeGet(chromadb.IncludeMetadatas),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query file meta for repo %s: %w", repo, err)
-	}
-	metas := result.GetMetadatas()
-	out := make([]FileMeta, 0, len(metas))
-	for _, m := range metas {
-		if m == nil {
-			continue
-		}
-		fm := FileMeta{Repo: repo}
-		fm.Path, _ = m.GetString("path")
-		fm.Size, _ = m.GetInt("size")
-		fm.MTime, _ = m.GetInt("mtime")
-		fm.Hash, _ = m.GetString("hash")
-		out = append(out, fm)
-	}
-	return out, nil
-}
 
 // GetBatchFileMeta returns file metadata keyed by absolute path for one repo.
-func (c *ChromaClient) GetBatchFileMeta(ctx context.Context, repo string) (map[string]*FileMeta, error) {
-	rows, err := c.QueryAllFileMeta(ctx, repo)
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[string]*FileMeta, len(rows))
-	for i := range rows {
-		row := rows[i]
-		rowCopy := row
-		out[row.Path] = &rowCopy
-	}
-	return out, nil
-}
 
 // UpsertRepoMeta stores or updates per-repository indexing state.
-func (c *ChromaClient) UpsertRepoMeta(ctx context.Context, meta RepoMeta) error {
-	docMeta := chromadb.NewDocumentMetadata(
-		chromadb.NewStringAttribute("repo", meta.Repo),
-		chromadb.NewStringAttribute("root_path", meta.RootPath),
-		chromadb.NewStringAttribute("default_branch", meta.DefaultBranch),
-		chromadb.NewStringAttribute("current_branch", meta.CurrentBranch),
-		chromadb.NewStringAttribute("last_indexed_commit", meta.LastIndexedCommit),
-		chromadb.NewStringAttribute("last_indexed_at", meta.LastIndexedAt),
-		chromadb.NewStringAttribute("index_mode", meta.IndexMode),
-		chromadb.NewIntAttribute("file_count", meta.FileCount),
-		chromadb.NewIntAttribute("chunk_count", meta.ChunkCount),
-		chromadb.NewIntAttribute("duration_ms", meta.DurationMs),
-	)
-	err := c.repos.Upsert(ctx,
-		chromadb.WithIDs(chromadb.DocumentID(meta.Repo)),
-		chromadb.WithTexts(meta.Repo),
-		chromadb.WithMetadatas(docMeta),
-	)
-	if err != nil {
-		return fmt.Errorf("upsert repo meta for %s: %w", meta.Repo, err)
-	}
-	return nil
-}
 
 // GetRepoMeta retrieves indexing state for a single repository.
 // Returns nil without error if the repo has never been indexed.
-func (c *ChromaClient) GetRepoMeta(ctx context.Context, repo string) (*RepoMeta, error) {
-	result, err := c.repos.Get(ctx,
-		chromadb.WithIDsGet(chromadb.DocumentID(repo)),
-		chromadb.WithIncludeGet(chromadb.IncludeMetadatas),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("get repo meta for %s: %w", repo, err)
-	}
-	ids := result.GetIDs()
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	metas := result.GetMetadatas()
-	if len(metas) == 0 || metas[0] == nil {
-		return nil, nil
-	}
-	return repoMetaFromDoc(metas[0]), nil
-}
 
 // ListRepoMeta returns indexing state for all known repositories.
-func (c *ChromaClient) ListRepoMeta(ctx context.Context) ([]RepoMeta, error) {
-	result, err := c.repos.Get(ctx,
-		chromadb.WithIncludeGet(chromadb.IncludeMetadatas),
-		chromadb.WithLimitGet(10000),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("list repo meta: %w", err)
-	}
-	metas := result.GetMetadatas()
-	out := make([]RepoMeta, 0, len(metas))
-	for _, m := range metas {
-		if m == nil {
-			continue
-		}
-		out = append(out, *repoMetaFromDoc(m))
-	}
-	return out, nil
-}
 
 // DeleteRepoMeta removes indexing state for a single repository.
-func (c *ChromaClient) DeleteRepoMeta(ctx context.Context, repo string) error {
-	err := c.repos.Delete(ctx,
-		chromadb.WithIDsDelete(chromadb.DocumentID(repo)),
-	)
-	if err != nil {
-		return fmt.Errorf("delete repo meta for %s: %w", repo, err)
-	}
-	return nil
-}
 
 // DeleteAllRepoMeta removes indexing state for all repositories.
-func (c *ChromaClient) DeleteAllRepoMeta(ctx context.Context) error {
-	result, err := c.repos.Get(ctx, chromadb.WithLimitGet(10000))
-	if err != nil {
-		return fmt.Errorf("list repos for deletion: %w", err)
-	}
-	ids := result.GetIDs()
-	if len(ids) == 0 {
-		return nil
-	}
-	return c.repos.Delete(ctx, chromadb.WithIDsDelete(ids...))
-}
 
-func repoMetaFromDoc(m chromadb.DocumentMetadata) *RepoMeta {
-	rm := &RepoMeta{}
-	rm.Repo, _ = m.GetString("repo")
-	rm.RootPath, _ = m.GetString("root_path")
-	rm.DefaultBranch, _ = m.GetString("default_branch")
-	rm.CurrentBranch, _ = m.GetString("current_branch")
-	rm.LastIndexedCommit, _ = m.GetString("last_indexed_commit")
-	rm.LastIndexedAt, _ = m.GetString("last_indexed_at")
-	rm.IndexMode, _ = m.GetString("index_mode")
-	rm.FileCount, _ = m.GetInt("file_count")
-	rm.ChunkCount, _ = m.GetInt("chunk_count")
-	rm.DurationMs, _ = m.GetInt("duration_ms")
-	return rm
-}
 
 // QueryChunks performs semantic similarity search on the indexed code chunks.
 // opts controls filtering, deduplication, context expansion, and hybrid ranking.
@@ -766,4 +542,41 @@ func countTermFreq(words []string) map[string]int {
 		m[w]++
 	}
 	return m
+}
+
+func (c *ChromaClient) GetFileMeta(ctx context.Context, repo, path string) (*FileMeta, error) {
+	return c.sqlite.GetFileMeta(ctx, repo, path)
+}
+func (c *ChromaClient) UpsertFileMeta(ctx context.Context, repo, path string, size, mtime int64, hash string) error {
+	return c.sqlite.UpsertFileMeta(ctx, repo, path, size, mtime, hash)
+}
+func (c *ChromaClient) UpsertBatchFileMeta(ctx context.Context, metas []FileMeta) error {
+	return c.sqlite.UpsertBatchFileMeta(ctx, metas)
+}
+func (c *ChromaClient) QueryAllFileMeta(ctx context.Context, repo string) ([]FileMeta, error) {
+	return c.sqlite.QueryAllFileMeta(ctx, repo)
+}
+func (c *ChromaClient) GetBatchFileMeta(ctx context.Context, repo string) (map[string]*FileMeta, error) {
+	return c.sqlite.GetBatchFileMeta(ctx, repo)
+}
+func (c *ChromaClient) DeleteFileMeta(ctx context.Context, repo, path string) error {
+	return c.sqlite.DeleteFileMeta(ctx, repo, path)
+}
+func (c *ChromaClient) DeleteRepoFileMeta(ctx context.Context, repo string) error {
+	return c.sqlite.DeleteRepoFileMeta(ctx, repo)
+}
+func (c *ChromaClient) UpsertRepoMeta(ctx context.Context, meta RepoMeta) error {
+	return c.sqlite.UpsertRepoMeta(ctx, meta)
+}
+func (c *ChromaClient) GetRepoMeta(ctx context.Context, repo string) (*RepoMeta, error) {
+	return c.sqlite.GetRepoMeta(ctx, repo)
+}
+func (c *ChromaClient) ListRepoMeta(ctx context.Context) ([]RepoMeta, error) {
+	return c.sqlite.ListRepoMeta(ctx)
+}
+func (c *ChromaClient) DeleteRepoMeta(ctx context.Context, repo string) error {
+	return c.sqlite.DeleteRepoMeta(ctx, repo)
+}
+func (c *ChromaClient) DeleteAllRepoMeta(ctx context.Context) error {
+	return c.sqlite.DeleteAllRepoMeta(ctx)
 }

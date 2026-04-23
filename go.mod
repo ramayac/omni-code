@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/amikos-tech/chroma-go v0.4.0
+	github.com/mattn/go-sqlite3 v1.14.42
 	github.com/modelcontextprotocol/go-sdk v0.8.0
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	github.com/tree-sitter/go-tree-sitter v0.25.0
