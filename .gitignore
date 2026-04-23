@@ -7,3 +7,8 @@ build_error.txt
 error.txt
 get.log
 tidy.log
+wiki/index.md
+.gitignore
+omni-code-meta.db
+omni-code-meta.db-wal
+omni-code-meta.db-shm

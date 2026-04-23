@@ -1,0 +1,23 @@
+# Wiki Log
+
+Append-only timeline of wiki maintenance activity.
+
+## [2026-04-23] ingest | initial full-repo wiki build
+
+### What was added
+
+- **repo-map.md** — fully populated with purpose, high-signal areas (16 entries), generated artifacts, build/run commands, and `.wikirc` ignore list.
+- **architecture.md** — system overview, ASCII layer diagram, storage model (ChromaDB chunks + SQLite tables), change detection cascade, chunking strategy (9 tree-sitter languages), search pipeline, MCP transport modes, config resolution order.
+- **mcp-tools.md** — complete inventory of all 14 MCP tools with parameters, plus "adding a new tool" procedure and supported tree-sitter language table.
+- **agents-guide.md** — AI agent SOPs, repo layout table, common tasks, testing guidelines.
+- **big-plan.md** — consolidated from `docs/plan000.md`, `docs/plan001.md`, `docs/lessons001.md`, `docs/todo001.md`. Covers completed phases, pending work items, and 8 key lessons learned.
+
+### What was migrated
+
+- `AGENTS.md` content → `wiki/agents-guide.md` (root file retained as redirect since it's used as a user rule).
+- `docs/plan000.md`, `docs/plan001.md`, `docs/lessons001.md`, `docs/todo001.md` → consolidated into `wiki/big-plan.md`.
+
+### Needs human review
+
+- `docs/` directory: original files retained — consider deleting once wiki content is validated.
+- `AGENTS.md`: retained in root because it serves as the user rule file for AI agents. Content is duplicated in `wiki/agents-guide.md`.
