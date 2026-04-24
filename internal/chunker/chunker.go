@@ -1,9 +1,11 @@
 package chunker
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"strings"
 
 	sitter "github.com/tree-sitter/go-tree-sitter"
@@ -21,11 +23,12 @@ import (
 )
 
 const (
-	maxChunkChars    = 3200 // ~800 tokens at 4 chars/token
-	overlapChars     = 200  // ~50-token overlap for large-node splits
-	smallFileThresh  = 1000 // files smaller than this become a single chunk
-	lineChunkWords   = 500  // words per line-based chunk
-	lineOverlapWords = 50   // word overlap between consecutive line-based chunks
+	maxChunkChars       = 3200 // ~800 tokens at 4 chars/token
+	overlapChars        = 200  // ~50-token overlap for large-node splits
+	smallFileThresh     = 1000 // files smaller than this become a single chunk
+	lineChunkWords      = 500  // words per line-based chunk
+	lineOverlapWords    = 50   // word overlap between consecutive line-based chunks
+	maxInMemoryFileSize = 1024 * 1024 // 1MB threshold for streaming
 )
 
 // goTopKinds lists the tree-sitter node types that represent top-level Go declarations.
@@ -97,64 +100,64 @@ var jsonTopKinds = map[string]bool{
 
 // ChunkFile splits source file content into semantically meaningful chunks suitable for
 // embedding. It is the package's primary entry point and satisfies indexer.ChunkFunc.
-func ChunkFile(repo, path, content, lang string) ([]db.Chunk, error) {
+func ChunkFile(repo, path string, r io.Reader, size int64, lang string, emit func(db.Chunk) error) error {
+	if size > maxInMemoryFileSize {
+		return chunkSequential(repo, path, r, lang, emit)
+	}
+
+	contentBytes, err := io.ReadAll(r)
+	if err != nil {
+		return fmt.Errorf("read file to memory: %w", err)
+	}
+	content := string(contentBytes)
+
 	// Small-file shortcut: entire file fits in one chunk.
 	if len(content) < smallFileThresh {
 		lineCount := strings.Count(content, "\n") + 1
-		return []db.Chunk{makeChunk(repo, path, lang, content, 1, lineCount, nil)}, nil
+		return emit(makeChunk(repo, path, lang, content, 1, lineCount, nil))
 	}
+
+	var chunks []db.Chunk
 
 	// Try tree-sitter for supported code languages.
 	switch lang {
 	case "go":
-		if chunks, err := chunkCode(repo, path, content, lang,
-			sitter.NewLanguage(tree_sitter_go.Language()), goTopKinds); err == nil && len(chunks) > 0 {
-			return chunks, nil
-		}
+		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_go.Language()), goTopKinds)
 	case "javascript":
-		if chunks, err := chunkCode(repo, path, content, lang,
-			sitter.NewLanguage(tree_sitter_javascript.Language()), jsTopKinds); err == nil && len(chunks) > 0 {
-			return chunks, nil
-		}
+		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_javascript.Language()), jsTopKinds)
 	case "typescript":
-		if chunks, err := chunkCode(repo, path, content, lang,
-			sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript()), jsTopKinds); err == nil && len(chunks) > 0 {
-			return chunks, nil
-		}
+		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript()), jsTopKinds)
 	case "python":
-		if chunks, err := chunkCode(repo, path, content, lang,
-			sitter.NewLanguage(tree_sitter_python.Language()), pyTopKinds); err == nil && len(chunks) > 0 {
-			return chunks, nil
-		}
+		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_python.Language()), pyTopKinds)
 	case "java":
-		if chunks, err := chunkCode(repo, path, content, lang,
-			sitter.NewLanguage(tree_sitter_java.Language()), javaTopKinds); err == nil && len(chunks) > 0 {
-			return chunks, nil
-		}
+		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_java.Language()), javaTopKinds)
 	case "php":
-		if chunks, err := chunkCode(repo, path, content, lang,
-			sitter.NewLanguage(tree_sitter_php.LanguagePHP()), phpTopKinds); err == nil && len(chunks) > 0 {
-			return chunks, nil
-		}
+		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_php.LanguagePHP()), phpTopKinds)
 	case "ruby":
-		if chunks, err := chunkCode(repo, path, content, lang,
-			sitter.NewLanguage(tree_sitter_ruby.Language()), rubyTopKinds); err == nil && len(chunks) > 0 {
-			return chunks, nil
-		}
+		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_ruby.Language()), rubyTopKinds)
 	case "html":
-		if chunks, err := chunkCode(repo, path, content, lang,
-			sitter.NewLanguage(tree_sitter_html.Language()), htmlTopKinds); err == nil && len(chunks) > 0 {
-			return chunks, nil
-		}
+		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_html.Language()), htmlTopKinds)
 	case "json":
-		if chunks, err := chunkCode(repo, path, content, lang,
-			sitter.NewLanguage(tree_sitter_json.Language()), jsonTopKinds); err == nil && len(chunks) > 0 {
-			return chunks, nil
+		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_json.Language()), jsonTopKinds)
+	}
+
+	if err == nil && len(chunks) > 0 {
+		for _, c := range chunks {
+			if err := emit(c); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
 
 	// Fallback: line-based splitting for text, markdown, and unsupported languages.
-	return chunkByLines(repo, path, content, lang), nil
+	chunks = chunkByLines(repo, path, content, lang)
+	for _, c := range chunks {
+		if err := emit(c); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // chunkCode parses source with tree-sitter and emits one chunk per top-level declaration.
@@ -299,6 +302,71 @@ func chunkByLines(repo, path, content, lang string) []db.Chunk {
 		start = next
 	}
 	return chunks
+}
+
+// chunkSequential reads an io.Reader line by line and emits chunks without loading
+// the entire file into memory. It mimics chunkByLines but streams chunks instead.
+func chunkSequential(repo, path string, r io.Reader, lang string, emit func(db.Chunk) error) error {
+	scanner := bufio.NewScanner(r)
+	// We need a larger buffer if lines are long
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	var chunkLines []string
+	wordCount := 0
+	startLine := 1
+	currentLine := 1
+
+	emitChunk := func() error {
+		if len(chunkLines) == 0 {
+			return nil
+		}
+		chunkText := strings.Join(chunkLines, "\n")
+		endLine := currentLine - 1
+		chunk := makeChunk(repo, path, lang, chunkText, startLine, endLine, nil)
+		if err := emit(chunk); err != nil {
+			return err
+		}
+
+		// Calculate overlap
+		overlapLines := 0
+		overlapWords := 0
+		for i := len(chunkLines) - 1; i >= 0 && overlapWords < lineOverlapWords; i-- {
+			overlapWords += len(strings.Fields(chunkLines[i]))
+			overlapLines++
+		}
+		if overlapLines >= len(chunkLines) {
+			overlapLines = len(chunkLines) / 2
+		}
+
+		// Keep overlap lines for the next chunk
+		chunkLines = append([]string(nil), chunkLines[len(chunkLines)-overlapLines:]...)
+		wordCount = overlapWords
+		startLine = endLine - overlapLines + 1
+		return nil
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		chunkLines = append(chunkLines, line)
+		wordCount += len(strings.Fields(line))
+		currentLine++
+
+		if wordCount >= lineChunkWords {
+			if err := emitChunk(); err != nil {
+				return err
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("sequential scan error: %w", err)
+	}
+
+	if len(chunkLines) > 0 {
+		return emitChunk()
+	}
+	return nil
 }
 
 // chunkID generates a deterministic SHA-256 identifier for a chunk based on its

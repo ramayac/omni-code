@@ -21,3 +21,10 @@ Append-only timeline of wiki maintenance activity.
 
 - `docs/` directory: original files retained — consider deleting once wiki content is validated.
 - `AGENTS.md`: retained in root because it serves as the user rule file for AI agents. Content is duplicated in `wiki/agents-guide.md`.
+
+## [2026-04-23] ingest | indexer memory optimization
+
+### What was added
+
+- **indexer-memory-plan.md** — documented the architectural shift from reading entire files into memory strings towards a stream-based chunk emitting pipeline, solving the 20+ GB RAM usage problem during massive indexing runs. Included limits (`MaxFileSizeBytes`) and `bufio.Scanner` sequential scanning fallback.
+- Updated `wiki/index.md` to link `indexer-memory-plan.md` under Topic Pages.

@@ -74,7 +74,7 @@ func DetectLanguage(path string) string {
 }
 
 // ChunkFunc is the signature used to chunk a file's content into indexable segments.
-type ChunkFunc func(repo, path, content, lang string) ([]db.Chunk, error)
+type ChunkFunc func(repo, path string, r io.Reader, size int64, lang string, emit func(db.Chunk) error) error
 
 // IndexerConfig holds all parameters for a single indexing run.
 type IndexerConfig struct {
@@ -94,6 +94,8 @@ type IndexerConfig struct {
 	SkipBranchCheck bool
 	// SkipIfWrongBranch stops scanning if the current branch doesn't match Branch.
 	SkipIfWrongBranch bool
+	// MaxFileSizeBytes skips indexing files larger than this size.
+	MaxFileSizeBytes int64
 }
 
 // IndexStats reports the outcome of a RunIndex call.
@@ -200,7 +202,13 @@ const (
 
 // processFile runs detect → deduplicate → chunk → store for one file.
 func processFile(ctx context.Context, cfg IndexerConfig, path string, info os.FileInfo,
-	cache *hashCache, seenHashes *sync.Map, fileMetas map[string]*db.FileMeta) (ls IndexStats, chunks []db.Chunk, meta *db.FileMeta) {
+	cache *hashCache, seenHashes *sync.Map, fileMetas map[string]*db.FileMeta, emit func(db.Chunk) error) (ls IndexStats, meta *db.FileMeta) {
+
+	if cfg.MaxFileSizeBytes > 0 && info.Size() > cfg.MaxFileSizeBytes {
+		log.Printf("[indexer] skip huge file %s (%d bytes > max %d)", path, info.Size(), cfg.MaxFileSizeBytes)
+		ls.FilesUnchanged++
+		return
+	}
 
 	changed, hash, err := HasChanged(fileMetas, path, info, cache)
 	if err != nil {
@@ -218,20 +226,15 @@ func processFile(ctx context.Context, cfg IndexerConfig, path string, info os.Fi
 	}
 	ls.FilesChanged++
 
-	content, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
-		log.Printf("[indexer] read %s: %v", path, err)
+		log.Printf("[indexer] open %s: %v", path, err)
 		ls.Errors++
 		return
 	}
+	defer f.Close()
 
 	lang := DetectLanguage(path)
-	chunks, err = cfg.ChunkFn(cfg.RepoName, path, string(content), lang)
-	if err != nil {
-		log.Printf("[indexer] chunk %s: %v", path, err)
-		ls.Errors++
-		return
-	}
 	if cfg.DB != nil {
 		if err := cfg.DB.DeleteFileChunks(ctx, cfg.RepoName, path); err != nil {
 			log.Printf("[indexer] delete old chunks %s: %v", path, err)
@@ -239,7 +242,19 @@ func processFile(ctx context.Context, cfg IndexerConfig, path string, info os.Fi
 			return
 		}
 	}
-	ls.ChunksUpserted = len(chunks)
+
+	chunksUpserted := 0
+	err = cfg.ChunkFn(cfg.RepoName, path, f, info.Size(), lang, func(chunk db.Chunk) error {
+		chunksUpserted++
+		return emit(chunk)
+	})
+	if err != nil {
+		log.Printf("[indexer] chunk %s: %v", path, err)
+		ls.Errors++
+		return
+	}
+	ls.ChunksUpserted = chunksUpserted
+
 	meta = &db.FileMeta{
 		Repo:  cfg.RepoName,
 		Path:  path,
@@ -331,7 +346,15 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 		go func() {
 			defer wg.Done()
 			for item := range workCh {
-				ls, chunks, meta := processFile(ctx, cfg, item.path, item.info, cache, seenHashes, fileMetas)
+				ls, meta := processFile(ctx, cfg, item.path, item.info, cache, seenHashes, fileMetas, func(chunk db.Chunk) error {
+					mu.Lock()
+					chunkBuffer = append(chunkBuffer, chunk)
+					if len(chunkBuffer) >= chunkFlushSize {
+						flushLocked()
+					}
+					mu.Unlock()
+					return nil
+				})
 				mu.Lock()
 				stats.FilesScanned++
 				stats.FilesChanged += ls.FilesChanged
@@ -340,13 +363,10 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 				stats.ChunksUpserted += ls.ChunksUpserted
 				stats.Errors += ls.Errors
 				if ls.Errors == 0 {
-					if len(chunks) > 0 {
-						chunkBuffer = append(chunkBuffer, chunks...)
-					}
 					if meta != nil {
 						metaBuffer = append(metaBuffer, *meta)
 					}
-					if len(metaBuffer) >= fileMetaFlushSize || len(chunkBuffer) >= chunkFlushSize {
+					if len(metaBuffer) >= fileMetaFlushSize {
 						flushLocked()
 					}
 				}

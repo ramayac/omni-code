@@ -2,9 +2,22 @@ package chunker
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"testing"
+
+	"github.com/ramayac/omni-code/internal/db"
 )
+
+// chunkFileWrapper is a helper for tests to collect chunks into a slice
+func chunkFileWrapper(repo, path, content, lang string) ([]db.Chunk, error) {
+	var chunks []db.Chunk
+	err := ChunkFile(repo, path, strings.NewReader(content), int64(len(content)), lang, func(c db.Chunk) error {
+		chunks = append(chunks, c)
+		return nil
+	})
+	return chunks, err
+}
 
 // buildGoSource generates a syntactically valid Go source file with n top-level
 // functions to produce content that reliably exceeds the small-file threshold.
@@ -28,7 +41,7 @@ func buildGoSource(n int) string {
 
 func TestChunkFile_SmallFile(t *testing.T) {
 	content := "hello, world"
-	chunks, err := ChunkFile("repo", "tiny.go", content, "go")
+	chunks, err := chunkFileWrapper("repo", "tiny.go", content, "go")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -58,7 +71,7 @@ func TestChunkFile_GoCode(t *testing.T) {
 		t.Fatalf("test precondition: Go source must exceed %d chars, got %d", smallFileThresh, len(content))
 	}
 
-	chunks, err := ChunkFile("repo", "example.go", content, "go")
+	chunks, err := chunkFileWrapper("repo", "example.go", content, "go")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +122,7 @@ func TestChunkFile_Python(t *testing.T) {
 		t.Fatalf("test precondition: Python source must exceed %d chars, got %d", smallFileThresh, len(content))
 	}
 
-	chunks, err := ChunkFile("repo", "example.py", content, "python")
+	chunks, err := chunkFileWrapper("repo", "example.py", content, "python")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -144,7 +157,7 @@ func TestChunkFile_JavaScript(t *testing.T) {
 		t.Fatalf("test precondition: JS source must exceed %d chars, got %d", smallFileThresh, len(content))
 	}
 
-	chunks, err := ChunkFile("repo", "example.js", content, "javascript")
+	chunks, err := chunkFileWrapper("repo", "example.js", content, "javascript")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -176,7 +189,7 @@ func TestChunkFile_TypeScript(t *testing.T) {
 		t.Fatalf("test precondition: TS source must exceed %d chars, got %d", smallFileThresh, len(content))
 	}
 
-	chunks, err := ChunkFile("repo", "example.ts", content, "typescript")
+	chunks, err := chunkFileWrapper("repo", "example.ts", content, "typescript")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -194,7 +207,7 @@ func TestChunkFile_PlainText(t *testing.T) {
 	}
 	content := sb.String()
 
-	chunks, err := ChunkFile("repo", "notes.txt", content, "text")
+	chunks, err := chunkFileWrapper("repo", "notes.txt", content, "text")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -213,6 +226,57 @@ func TestChunkFile_PlainText(t *testing.T) {
 
 // ---- Large single tree-sitter node -> split with overlap ----
 
+func TestChunkSequential_LargeFile(t *testing.T) {
+	// Create a simulated "large" file that goes through the sequential chunker
+	var sb strings.Builder
+	for i := 0; i < 2000; i++ { // ensure many lines to trigger multiple chunks
+		fmt.Fprintf(&sb, "Line %04d: this is a long line %d to test sequential memory limits.\n", i, i)
+	}
+	content := sb.String()
+
+	var chunks []db.Chunk
+	err := chunkSequential("repo", "large.txt", strings.NewReader(content), "text", func(c db.Chunk) error {
+		chunks = append(chunks, c)
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("sequential large file should produce >= 2 chunks, got %d", len(chunks))
+	}
+	for _, c := range chunks {
+		if c.Content == "" {
+			t.Error("empty chunk content")
+		}
+		if c.StartLine < 1 {
+			t.Errorf("StartLine must be >= 1, got %d", c.StartLine)
+		}
+	}
+}
+
+func TestChunkFile_MaxInMemoryFileSize(t *testing.T) {
+	// Create content that is exactly larger than maxInMemoryFileSize
+	// To avoid allocating a massive string, we use an io.Reader that generates text
+	size := int64(maxInMemoryFileSize + 1024)
+	
+	chunksCount := 0
+	err := ChunkFile("repo", "huge.txt", io.LimitReader(strings.NewReader(strings.Repeat("word word word word\n", int(size/20+1))), size), size, "text", func(c db.Chunk) error {
+		chunksCount++
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if chunksCount < 2 {
+		t.Fatalf("huge file should be chunked into multiple pieces, got %d chunks", chunksCount)
+	}
+}
+
+// ---- Large single tree-sitter node -> split with overlap ----
+
 func TestChunkFile_LargeGoFunction(t *testing.T) {
 	var sb strings.Builder
 	sb.WriteString("package example\n\nimport \"fmt\"\n\n")
@@ -223,7 +287,7 @@ func TestChunkFile_LargeGoFunction(t *testing.T) {
 	sb.WriteString("}\n")
 	content := sb.String()
 
-	chunks, err := ChunkFile("repo", "big.go", content, "go")
+	chunks, err := chunkFileWrapper("repo", "big.go", content, "go")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -241,8 +305,8 @@ func TestChunkFile_LargeGoFunction(t *testing.T) {
 
 func TestChunkFile_DeterministicIDs(t *testing.T) {
 	content := buildGoSource(5)
-	chunks1, err1 := ChunkFile("repo", "a.go", content, "go")
-	chunks2, err2 := ChunkFile("repo", "a.go", content, "go")
+	chunks1, err1 := chunkFileWrapper("repo", "a.go", content, "go")
+	chunks2, err2 := chunkFileWrapper("repo", "a.go", content, "go")
 	if err1 != nil || err2 != nil {
 		t.Fatalf("errors: %v / %v", err1, err2)
 	}
@@ -260,8 +324,8 @@ func TestChunkFile_DeterministicIDs(t *testing.T) {
 
 func TestChunkFile_IDUniqueness(t *testing.T) {
 	content := buildGoSource(5)
-	chunksA, _ := ChunkFile("repo", "a.go", content, "go")
-	chunksB, _ := ChunkFile("repo", "b.go", content, "go")
+	chunksA, _ := chunkFileWrapper("repo", "a.go", content, "go")
+	chunksB, _ := chunkFileWrapper("repo", "b.go", content, "go")
 
 	seen := map[string]bool{}
 	for _, c := range chunksA {

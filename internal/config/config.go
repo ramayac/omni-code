@@ -33,6 +33,8 @@ type Config struct {
 	SkipFilenamesExtra  []string `yaml:"skip_filenames_extra"`
 	// SkipIfWrongBranch stops scanning/indexing if the repo is not on the expected branch.
 	SkipIfWrongBranch bool `yaml:"skip_if_wrong_branch"`
+	// MaxFileSizeBytes skips indexing files larger than this size (default 10GB).
+	MaxFileSizeBytes int64 `yaml:"max_file_size_bytes"`
 	// Chat mode configuration.
 	ChatAPIURL string      `yaml:"chat_api_url"`
 	ChatModel  string      `yaml:"chat_model"`
@@ -92,6 +94,7 @@ func ResolveConfig(base *Config, cliDB, cliEmbeddingBackend, cliEmbeddingModel, 
 		EmbeddingBackend: "",
 		EmbeddingModel:   "",
 		EmbeddingURL:     "",
+		MaxFileSizeBytes: 10 * 1024 * 1024 * 1024, // 10 GB default
 	}
 	if base != nil {
 		if base.DB != "" {
@@ -105,6 +108,9 @@ func ResolveConfig(base *Config, cliDB, cliEmbeddingBackend, cliEmbeddingModel, 
 		}
 		if base.EmbeddingURL != "" {
 			resolved.EmbeddingURL = base.EmbeddingURL
+		}
+		if base.MaxFileSizeBytes > 0 {
+			resolved.MaxFileSizeBytes = base.MaxFileSizeBytes
 		}
 	}
 
