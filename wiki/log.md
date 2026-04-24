@@ -28,3 +28,12 @@ Append-only timeline of wiki maintenance activity.
 
 - **indexer-memory-plan.md** — documented the architectural shift from reading entire files into memory strings towards a stream-based chunk emitting pipeline, solving the 20+ GB RAM usage problem during massive indexing runs. Included limits (`MaxFileSizeBytes`) and `bufio.Scanner` sequential scanning fallback.
 - Updated `wiki/index.md` to link `indexer-memory-plan.md` under Topic Pages.
+
+## [2026-04-23] maintenance | consolidate historical plans
+
+### What was changed
+
+- Merged `wiki/plan000.md` and `wiki/plan001.md` into a single `wiki/plans.md` file.
+- Renamed `wiki/lessons001.md` to `wiki/lessons.md` to drop versioning.
+- Renamed `wiki/todo001.md` to `wiki/todo.md` to drop versioning.
+- Updated `wiki/index.md` to point to the simplified structures.

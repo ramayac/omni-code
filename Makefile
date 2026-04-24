@@ -111,7 +111,7 @@ query: build
 ifndef Q
 	$(error Q is not set. Usage: make query Q="how does change detection work")
 endif
-	./bin/omni-code search --query "$(Q)" --hybrid
+	./bin/omni-code search --config repos.yaml --query "$(Q)" --hybrid
 
 # Start interactive chat session (OpenAI-compatible endpoint)
 chat: build
@@ -119,4 +119,4 @@ chat: build
 
 # Start MCP locally
 mcp: build
-	./bin/omni-code mcp --transport sse --addr :8090
+	./bin/omni-code mcp --config repos.yaml --transport sse --addr :8090
