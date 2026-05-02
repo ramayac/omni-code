@@ -22,6 +22,35 @@ Append-only timeline of wiki maintenance activity.
 - `docs/` directory: original files retained — consider deleting once wiki content is validated.
 - `AGENTS.md`: retained in root because it serves as the user rule file for AI agents. Content is duplicated in `wiki/agents-guide.md`.
 
+## [2026-05-01] maintenance | MCP-focused cleanup and hardening
+
+### What was changed
+
+- **Chat mode removed** — `internal/chat/` deleted, CLI subcommand deleted, config fields removed.
+- **Bug fixes applied** — 7 bugs fixed (log.Fatal in library, goroutine leak on ctx cancel, hashCache.get, SQLite close, OpenAIEmbedder index ordering, MCP shutdown timeout, handleGrep OOM).
+- **New tree-sitter parsers** — Rust, C, C++ added to `internal/chunker/chunker.go` (12 languages total).
+- **MCP server refactored** — `server.go` split into 5 files with handler groupings.
+
+### Wiki files updated
+
+- `wiki/repo-map.md` — removed chat entries, added new handler files, updated language count.
+- `wiki/architecture.md` — removed chat layer from diagram, updated chunking language count.
+- `wiki/mcp-tools.md` — added Rust/C/C++ to language table, updated "adding a tool" section.
+- `wiki/lessons.md` — added MCP-focused cleanup section with 8 new lessons (lessons 10–17).
+
+## [2026-05-01] strategy | MCP testing plan
+
+### What was added
+
+- **wiki/testing-plan.md** — comprehensive 5-layer testing strategy:
+  1. Handler unit tests (existing pattern, expanded with new cases per handler group)
+  2. Protocol tests using `mcp.NewInMemoryTransports()` — full JSON-RPC stack
+  3. Transport tests (stdio/SSE/streamable with httptest)
+  4. Integration tests with real ChromaDB (build-tag gated)
+  5. Manual conformance against real MCP clients (VS Code, Claude Desktop, MCP Inspector)
+- Includes priority ordering, test file organization, test data strategy, and run commands.
+- Updated `wiki/index.md` to link the new testing-plan page.
+
 ## [2026-04-23] ingest | indexer memory optimization
 
 ### What was added

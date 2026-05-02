@@ -125,7 +125,8 @@ func newHashCache() *hashCache {
 func (h *hashCache) get(key string) (string, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.cache[key], h.cache[key] != ""
+	v, ok := h.cache[key]
+	return v, ok
 }
 
 func (h *hashCache) set(key, val string) {
@@ -203,6 +204,11 @@ const (
 // processFile runs detect → deduplicate → chunk → store for one file.
 func processFile(ctx context.Context, cfg IndexerConfig, path string, info os.FileInfo,
 	cache *hashCache, seenHashes *sync.Map, fileMetas map[string]*db.FileMeta, emit func(db.Chunk) error) (ls IndexStats, meta *db.FileMeta) {
+
+	if ctx.Err() != nil {
+		ls.FilesUnchanged++
+		return
+	}
 
 	if cfg.MaxFileSizeBytes > 0 && info.Size() > cfg.MaxFileSizeBytes {
 		log.Printf("[indexer] skip huge file %s (%d bytes > max %d)", path, info.Size(), cfg.MaxFileSizeBytes)
@@ -301,7 +307,11 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 	var fileList []string // nil → WalkDir fallback
 
 	if isGitRepo {
-		headCommit = detectBranchAndCommit(ctx, cfg, stats)
+		var err error
+		headCommit, err = detectBranchAndCommit(ctx, cfg, stats)
+		if err != nil {
+			return stats, err
+		}
 		if headCommit == "" && cfg.SkipIfWrongBranch {
 			log.Printf("[indexer] skipping repo %s: not on expected branch %s", cfg.RepoName, cfg.Branch)
 			return stats, nil
@@ -415,6 +425,14 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 
 	if fileList != nil {
 		for _, path := range fileList {
+			select {
+			case <-ctx.Done():
+				break
+			default:
+			}
+			if ctx.Err() != nil {
+				break
+			}
 			if shouldSkipFile(path, cfg.RootPath, cfg.SkipExtensions, cfg.SkipFilenames, nil) {
 				continue
 			}
@@ -439,6 +457,9 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 			}
 		}
 		feedErr = filepath.WalkDir(cfg.RootPath, func(path string, d os.DirEntry, walkEntryErr error) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if walkEntryErr != nil {
 				log.Printf("[indexer] walk error at %s: %v", path, walkEntryErr)
 				mu.Lock()
@@ -501,9 +522,9 @@ func RunIndex(ctx context.Context, cfg IndexerConfig) (*IndexStats, error) {
 	return stats, nil
 }
 
-// detectBranchAndCommit performs branch-mismatch detection and returns HEAD SHA.
-// If SkipIfWrongBranch is set and branch mismatches, returns empty string to signal skip.
-func detectBranchAndCommit(_ context.Context, cfg IndexerConfig, stats *IndexStats) string {
+// detectBranchAndCommit performs branch-mismatch detection and returns (HEAD SHA, error).
+// If SkipIfWrongBranch is set and branch mismatches, returns ("", nil) to signal skip.
+func detectBranchAndCommit(_ context.Context, cfg IndexerConfig, stats *IndexStats) (string, error) {
 	if !cfg.SkipBranchCheck || cfg.SkipIfWrongBranch {
 		detected, err := git.DetectDefaultBranch(cfg.RootPath)
 		if err != nil {
@@ -518,12 +539,12 @@ func detectBranchAndCommit(_ context.Context, cfg IndexerConfig, stats *IndexSta
 				}
 				if current != expected {
 					if cfg.SkipIfWrongBranch {
-						return "" // Signal skip
+						return "", nil // Signal skip
 					}
 					msg := fmt.Sprintf("[indexer] WARNING: repo %s is on branch %s, expected %s",
 						cfg.RepoName, current, expected)
 					if cfg.StrictBranch {
-						log.Fatal(msg)
+						return "", fmt.Errorf("repo %s is on branch %s, expected %s", cfg.RepoName, current, expected)
 					}
 					log.Print(msg)
 				}
@@ -538,9 +559,9 @@ func detectBranchAndCommit(_ context.Context, cfg IndexerConfig, stats *IndexSta
 	commit, err := git.HeadCommit(cfg.RootPath)
 	if err != nil {
 		log.Printf("[indexer] WARNING: could not get HEAD commit for %s: %v", cfg.RepoName, err)
-		return ""
+		return "", nil
 	}
-	return commit
+	return commit, nil
 }
 
 // buildFileList decides between incremental (git diff) and full (git ls-files).

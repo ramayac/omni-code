@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	sitter "github.com/tree-sitter/go-tree-sitter"
+	tree_sitter_c "github.com/tree-sitter/tree-sitter-c/bindings/go"
+	tree_sitter_cpp "github.com/tree-sitter/tree-sitter-cpp/bindings/go"
 	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
 	tree_sitter_html "github.com/tree-sitter/tree-sitter-html/bindings/go"
 	tree_sitter_java "github.com/tree-sitter/tree-sitter-java/bindings/go"
@@ -17,6 +19,7 @@ import (
 	tree_sitter_php "github.com/tree-sitter/tree-sitter-php/bindings/go"
 	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
 	tree_sitter_ruby "github.com/tree-sitter/tree-sitter-ruby/bindings/go"
+	tree_sitter_rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 
 	"github.com/ramayac/omni-code/internal/db"
@@ -38,6 +41,43 @@ var goTopKinds = map[string]bool{
 	"type_declaration":     true,
 	"const_declaration":    true,
 	"var_declaration":      true,
+}
+
+// rustTopKinds lists top-level declaration node types for Rust.
+var rustTopKinds = map[string]bool{
+	"function_item":  true,
+	"struct_item":    true,
+	"enum_item":      true,
+	"trait_item":     true,
+	"impl_item":      true,
+	"mod_item":       true,
+	"const_item":     true,
+	"static_item":    true,
+	"type_item":      true,
+	"macro_definition": true,
+}
+
+// cTopKinds lists top-level declaration node types for C.
+var cTopKinds = map[string]bool{
+	"function_definition": true,
+	"struct_specifier":    true,
+	"union_specifier":     true,
+	"enum_specifier":      true,
+	"type_definition":     true,
+	"preproc_def":         true,
+	"preproc_function_def": true,
+}
+
+// cppTopKinds lists top-level declaration node types for C++.
+var cppTopKinds = map[string]bool{
+	"function_definition":    true,
+	"class_specifier":        true,
+	"struct_specifier":       true,
+	"enum_specifier":         true,
+	"type_definition":        true,
+	"namespace_definition":   true,
+	"template_declaration":   true,
+	"linkage_specification":  true,
 }
 
 // jsTopKinds covers top-level declarations for JavaScript and TypeScript.
@@ -139,6 +179,12 @@ func ChunkFile(repo, path string, r io.Reader, size int64, lang string, emit fun
 		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_html.Language()), htmlTopKinds)
 	case "json":
 		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_json.Language()), jsonTopKinds)
+	case "rust":
+		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_rust.Language()), rustTopKinds)
+	case "c":
+		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_c.Language()), cTopKinds)
+	case "cpp":
+		chunks, err = chunkCode(repo, path, content, lang, sitter.NewLanguage(tree_sitter_cpp.Language()), cppTopKinds)
 	}
 
 	if err == nil && len(chunks) > 0 {
@@ -421,6 +467,12 @@ func langToParser(lang string) (*sitter.Language, map[string]bool) {
 		return sitter.NewLanguage(tree_sitter_html.Language()), htmlTopKinds
 	case "json":
 		return sitter.NewLanguage(tree_sitter_json.Language()), jsonTopKinds
+	case "rust":
+		return sitter.NewLanguage(tree_sitter_rust.Language()), rustTopKinds
+	case "c":
+		return sitter.NewLanguage(tree_sitter_c.Language()), cTopKinds
+	case "cpp":
+		return sitter.NewLanguage(tree_sitter_cpp.Language()), cppTopKinds
 	default:
 		return nil, nil
 	}

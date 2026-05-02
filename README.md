@@ -1,6 +1,6 @@
 # omni-code
 
-A local codebase indexer, **MCP server**, and **interactive AI chat** written in Go. Connect it to GitHub Copilot via MCP, or use the built-in chat mode to ask natural-language questions about your local repositories from the terminal.
+A local codebase indexer and **MCP server** written in Go. Connect it to GitHub Copilot, Claude Desktop, or any MCP client to ask natural-language questions about your local repositories.
 
 ## Features
 
@@ -8,12 +8,11 @@ A local codebase indexer, **MCP server**, and **interactive AI chat** written in
 - **Pre-scan complexity estimation** — computes cheap repo scan estimates and sorts scheduling by estimated cost
 - **Multi-repo configuration** — configure multiple repositories in `repos.yaml` with custom branch and skip rules
 - **Intelligent change detection** — Hash-based change detection with global across-repo deduplication
-- **Semantic chunking** — Tree-sitter powered chunking for Go, Python, JS/TS, Rust, and Java
+- **Semantic chunking** — Tree-sitter powered chunking for Go, Python, JS/TS, Rust, C, C++, Java, PHP, Ruby, HTML, and JSON
 - **Flexible embedding backends** — local (Ollama/Chroma-built-in) or remote (OpenAI) embedding generation
 - **Hybrid search** — combines vector similarity with BM25 keyword ranking using Reciprocal Rank Fusion (RRF)
 - **Watch mode** — background daemon that polls for Git HEAD changes and re-indexes automatically
-- **Comprehensive MCP tools** — `search_codebase`, `list_repos`, `get_repo_files`, `get_file_content`, `git_status`, `git_diff`, `git_log`, `index_status`, `grep_codebase`, `get_file_symbols`, `reindex_repo`, `get_repo_summary`, `search_repo_summaries`, `get_top_contributors`
-- **Interactive chat mode** — Terminal REPL that talks to any OpenAI-compatible API with full tool access to your codebases
+- **14 MCP tools** — `search_codebase`, `list_repos`, `get_repo_files`, `get_file_content`, `git_status`, `git_diff`, `git_log`, `index_status`, `grep_codebase`, `get_file_symbols`, `reindex_repo`, `get_repo_summary`, `search_repo_summaries`, `get_top_contributors`
 
 ## Prerequisites
 
@@ -95,36 +94,6 @@ Start a background daemon that polls for changes every 5 minutes:
 ./bin/omni-code watch --config repos.yaml --interval 5m
 ```
 
-### Chat Mode
-
-Interactive terminal chat with full tool access to your indexed codebases:
-
-```bash
-# Using CLI flags
-./bin/omni-code chat --config repos.yaml --api-url https://api.openai.com/v1 --model gpt-4o
-
-# Using Ollama locally
-./bin/omni-code chat --config repos.yaml --api-url http://localhost:11434/v1 --model llama3
-```
-
-Or configure in `repos.yaml`:
-
-```yaml
-chat_api_url: http://localhost:11434/v1
-chat_model: llama3
-```
-
-Then just run:
-
-```bash
-./bin/omni-code chat --config repos.yaml
-# or: make chat
-```
-
-Set `OPENAI_API_KEY` or `OMNI_CHAT_API_KEY` for authenticated endpoints.
-
-In-chat commands: `/help`, `/tools`, `/clear`, `/quit`.
-
 ### MCP Server
 
 #### stdio (default — for VS Code / Copilot CLI direct spawn)
@@ -190,17 +159,18 @@ Add to `.vscode/mcp.json`:
 ## Architecture
 
 ```
-cmd/omni-code/main.go       CLI entry point (index, search, chat, mcp, watch, repos)
+cmd/omni-code/main.go       CLI entry point (index, search, mcp, watch, repos, reset)
 internal/config/            Config loading, resolution, and skip-list logic
 internal/git/               Git-aware file listing, branch detection, diffing
 internal/estimator/         Pre-scan complexity estimation & score sorting
-internal/db/chroma.go       ChromaDB client — files, chunks, and repos collections
+internal/db/chroma.go       ChromaDB client — chunks collection
+internal/db/sqlite.go       SQLite store for file and repo metadata
 internal/indexer/indexer.go Change detection, deduplication, incremental logic
-internal/chunker/chunker.go Tree-sitter & line-based chunking
+internal/chunker/chunker.go Tree-sitter & line-based chunking (12 languages)
 internal/embedder/          Pluggable backends (Chroma, Ollama, OpenAI)
-internal/mcp/server.go      MCP server providing codebase exploration tools
-internal/mcp/dispatch.go    Tool definitions & dispatch for chat mode bridge
-internal/chat/              Interactive REPL, OpenAI client, tool bridge
+internal/mcp/server.go      MCP transport setup, CORS, shared param types
+internal/mcp/handlers_*.go  MCP tool handlers (search, repo, git, index)
+internal/mcp/dispatch.go    Tool definitions & dispatch
 ```
 
 ## Data flow

@@ -20,11 +20,7 @@ omni-code is a local codebase indexer, MCP server, and interactive AI chat writt
 | `internal/estimator/` | Pre-scan complexity estimation and cost-sorted scheduling |
 | `internal/mcp/server.go` | MCP server — `buildServer()` shared tool registration, stdio/SSE/streamable transports |
 | `internal/mcp/dispatch.go` | Tool definitions and dispatch bridge for chat mode |
-| `internal/chat/chat.go` | Interactive terminal REPL |
-| `internal/chat/openai.go` | OpenAI-compatible API client for chat completions |
-| `internal/chat/tools.go` | Chat→MCP tool bridge |
-| `repos.yaml` / `repos-example.yaml` | Multi-repo configuration file |
-| `Makefile` | Build, test, index, chat, MCP, DB management targets |
+| `Makefile` | Build, test, index, MCP, DB management targets |
 
 ## Generated Artifacts
 
@@ -62,9 +58,6 @@ make estimate
 
 # Search
 ./bin/omni-code search --query "how does change detection work" --hybrid
-
-# Chat mode
-make chat
 
 # MCP server (SSE)
 make mcp
