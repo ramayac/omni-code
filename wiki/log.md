@@ -22,6 +22,22 @@ Append-only timeline of wiki maintenance activity.
 - `docs/` directory: original files retained — consider deleting once wiki content is validated.
 - `AGENTS.md`: retained in root because it serves as the user rule file for AI agents. Content is duplicated in `wiki/agents-guide.md`.
 
+## [2026-05-01] maintenance | MCP-focused cleanup and hardening
+
+### What was changed
+
+- **Chat mode removed** — `internal/chat/` deleted, CLI subcommand deleted, config fields removed.
+- **Bug fixes applied** — 7 bugs fixed (log.Fatal in library, goroutine leak on ctx cancel, hashCache.get, SQLite close, OpenAIEmbedder index ordering, MCP shutdown timeout, handleGrep OOM).
+- **New tree-sitter parsers** — Rust, C, C++ added to `internal/chunker/chunker.go` (12 languages total).
+- **MCP server refactored** — `server.go` split into 5 files with handler groupings.
+
+### Wiki files updated
+
+- `wiki/repo-map.md` — removed chat entries, added new handler files, updated language count.
+- `wiki/architecture.md` — removed chat layer from diagram, updated chunking language count.
+- `wiki/mcp-tools.md` — added Rust/C/C++ to language table, updated "adding a tool" section.
+- `wiki/lessons.md` — added MCP-focused cleanup section with 8 new lessons (lessons 10–17).
+
 ## [2026-04-23] ingest | indexer memory optimization
 
 ### What was added

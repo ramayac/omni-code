@@ -2,7 +2,7 @@
 
 ## System Overview
 
-omni-code is a Go monolith that indexes local Git repositories into a hybrid storage backend (ChromaDB for vector chunks, SQLite for metadata), then exposes the indexed data through three interfaces: CLI commands, an MCP protocol server, and an interactive AI chat REPL.
+omni-code is a Go monolith that indexes local Git repositories into a hybrid storage backend (ChromaDB for vector chunks, SQLite for metadata), then exposes the indexed data through CLI commands and an MCP protocol server.
 
 ## Data Flow
 
@@ -23,9 +23,8 @@ git ls-files / filepath.WalkDir
 │                   cmd/omni-code/                    │
 │         CLI flags, subcommand routing, watch loop   │
 ├─────────────────────────────────────────────────────┤
-│  internal/chat/   │  internal/mcp/                  │
-│  REPL + OpenAI    │  MCP server (stdio/SSE/stream)  │
-│  client + tools   │  Tool handlers + dispatch       │
+│  internal/mcp/                                      │
+│  MCP server (stdio/SSE/stream) + handler files      │
 ├─────────────────────────────────────────────────────┤
 │  internal/indexer/          │  internal/estimator/   │
 │  Change detection, dedup,   │  Pre-scan cost sort    │
@@ -102,7 +101,7 @@ After change detection, a global `sync.Map` of hashes provides cross-repo dedupl
 ## Chunking Strategy
 
 - **Small files** (<1000 chars) → single chunk
-- **Tree-sitter supported** (Go, JS, TS, Python, Java, PHP, Ruby, HTML, JSON) → one chunk per top-level declaration; oversized nodes split with 200-char overlap
+- **Tree-sitter supported** (Go, JS, TS, Python, Java, Rust, C, C++, PHP, Ruby, HTML, JSON) → one chunk per top-level declaration; oversized nodes split with 200-char overlap
 - **Fallback** → line-based splitting at ~500-word boundaries with ~50-word overlap
 - **Max chunk size**: ~3200 chars (~800 tokens)
 

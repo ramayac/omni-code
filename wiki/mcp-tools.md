@@ -23,12 +23,16 @@ All tools are registered in `buildServer()` (`internal/mcp/server.go`) and dupli
 
 ## Adding a New Tool
 
-1. Add handler function in `internal/mcp/server.go` (e.g. `handleMyTool`)
-2. Register it in `buildServer()` with `s.AddTool()`
+1. Add handler function in the appropriate handler file:
+   - `internal/mcp/handlers_search.go` — search_codebase, grep_codebase, get_file_content
+   - `internal/mcp/handlers_repo.go` — list_repos, get_repo_files, get_repo_summary, search_repo_summaries
+   - `internal/mcp/handlers_git.go` — git_status, git_diff, git_log, get_top_contributors
+   - `internal/mcp/handlers_index.go` — index_status, reindex_repo, get_file_symbols
+2. Register it in `buildServer()` in `internal/mcp/server.go` with the appropriate shared param type
 3. Add a `SimpleTool` entry to `ToolDefinitions()` in `internal/mcp/dispatch.go`
 4. Add a dispatch case to `DispatchTool()` in `internal/mcp/dispatch.go`
 
-This ensures the tool is available in all three MCP transports **and** in chat mode.
+Shared parameter types (`searchParams`, `repoParams`, `repoFilesParams`, `fileContentParams`, `grepParams`, `reindexParams`, `topContributorsParams`) are defined in `internal/mcp/server.go`.
 
 ## Supported Tree-sitter Languages
 
@@ -41,6 +45,9 @@ For `get_file_symbols` and semantic chunking:
 | TypeScript | `.ts`, `.tsx` | Same as JavaScript + interface_declaration, type_alias_declaration |
 | Python | `.py` | function_definition, class_definition, decorated_definition |
 | Java | `.java` | class_declaration, interface_declaration, enum_declaration, annotation_type_declaration, record_declaration |
+| Rust | `.rs` | function_item, struct_item, enum_item, trait_item, impl_item, mod_item, const_item, static_item, type_item, macro_definition |
+| C | `.c` | function_definition, struct_specifier, union_specifier, enum_specifier, type_definition, preproc_def, preproc_function_def |
+| C++ | `.cpp`, `.cc`, `.cxx` | function_definition, class_specifier, struct_specifier, enum_specifier, type_definition, namespace_definition, template_declaration, linkage_specification |
 | PHP | `.php` | class_declaration, function_definition, interface_declaration, trait_declaration, namespace_definition |
 | Ruby | `.rb` | class, module, method, singleton_method |
 | HTML | `.html` | element, script_element, style_element |
