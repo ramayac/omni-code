@@ -38,6 +38,19 @@ Append-only timeline of wiki maintenance activity.
 - `wiki/mcp-tools.md` — added Rust/C/C++ to language table, updated "adding a tool" section.
 - `wiki/lessons.md` — added MCP-focused cleanup section with 8 new lessons (lessons 10–17).
 
+## [2026-05-01] strategy | MCP testing plan
+
+### What was added
+
+- **wiki/testing-plan.md** — comprehensive 5-layer testing strategy:
+  1. Handler unit tests (existing pattern, expanded with new cases per handler group)
+  2. Protocol tests using `mcp.NewInMemoryTransports()` — full JSON-RPC stack
+  3. Transport tests (stdio/SSE/streamable with httptest)
+  4. Integration tests with real ChromaDB (build-tag gated)
+  5. Manual conformance against real MCP clients (VS Code, Claude Desktop, MCP Inspector)
+- Includes priority ordering, test file organization, test data strategy, and run commands.
+- Updated `wiki/index.md` to link the new testing-plan page.
+
 ## [2026-04-23] ingest | indexer memory optimization
 
 ### What was added
