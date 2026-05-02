@@ -114,8 +114,7 @@ endif
 	./bin/omni-code search --config repos.yaml --query "$(Q)" --hybrid
 
 # Start interactive chat session (OpenAI-compatible endpoint)
-chat: build
-	./bin/omni-code chat --config repos.yaml
+# (removed — use an MCP-compatible chat client with omni-code mcp instead)
 
 # Start MCP locally
 mcp: build

@@ -17,8 +17,6 @@ const (
 	EnvEmbeddingModelAlias   = "OMNI_EMBEDDING_MODEL"
 	EnvEmbeddingURLAlias     = "OMNI_EMBEDDING_URL"
 
-	EnvChatAPIURL = "OMNI_CHAT_API_URL"
-	EnvChatModel  = "OMNI_CHAT_MODEL"
 )
 
 // Config is the top-level structure of repos.yaml.
@@ -35,10 +33,7 @@ type Config struct {
 	SkipIfWrongBranch bool `yaml:"skip_if_wrong_branch"`
 	// MaxFileSizeBytes skips indexing files larger than this size (default 10GB).
 	MaxFileSizeBytes int64 `yaml:"max_file_size_bytes"`
-	// Chat mode configuration.
-	ChatAPIURL string      `yaml:"chat_api_url"`
-	ChatModel  string      `yaml:"chat_model"`
-	Repos      []RepoEntry `yaml:"repos"`
+	Repos []RepoEntry `yaml:"repos"`
 }
 
 // RepoEntry describes a single repository to be indexed.
@@ -138,22 +133,6 @@ func ResolveConfig(base *Config, cliDB, cliEmbeddingBackend, cliEmbeddingModel, 
 	}
 	if cliEmbeddingURL != "" {
 		resolved.EmbeddingURL = cliEmbeddingURL
-	}
-
-	// Chat settings: yaml -> env.
-	if base != nil {
-		if base.ChatAPIURL != "" {
-			resolved.ChatAPIURL = base.ChatAPIURL
-		}
-		if base.ChatModel != "" {
-			resolved.ChatModel = base.ChatModel
-		}
-	}
-	if v := firstEnv(EnvChatAPIURL); v != "" {
-		resolved.ChatAPIURL = v
-	}
-	if v := firstEnv(EnvChatModel); v != "" {
-		resolved.ChatModel = v
 	}
 
 	return resolved

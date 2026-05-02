@@ -102,6 +102,15 @@ func NewChromaClient(ctx context.Context, baseURL string, sqlitePath string) (*C
 	return &ChromaClient{client: client, sqlite: sqlite}, nil
 }
 
+// Close cleanly shuts down the client, closing the SQLite database and performing
+// a WAL checkpoint.
+func (c *ChromaClient) Close() error {
+	if c.sqlite != nil {
+		return c.sqlite.close()
+	}
+	return nil
+}
+
 // EnsureCollections creates or retrieves the `files`, `chunks`, and `repos`
 // collections. ef is the embedding function for the chunks collection; pass
 // nil to skip setting a server-side EF (use when providing external embeddings).

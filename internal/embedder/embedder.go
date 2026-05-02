@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 )
 
 // Embedder computes dense vector embeddings for a batch of text inputs.
@@ -173,11 +174,16 @@ func (e *OpenAIEmbedder) Embed(ctx context.Context, texts []string) ([][]float32
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
+	if len(result.Data) != len(texts) {
+		return nil, fmt.Errorf("expected %d embeddings, got %d", len(texts), len(result.Data))
+	}
+	// Sort by index to handle out-of-order responses from compatible backends.
+	sort.Slice(result.Data, func(i, j int) bool {
+		return result.Data[i].Index < result.Data[j].Index
+	})
 	embeddings := make([][]float32, len(texts))
-	for _, d := range result.Data {
-		if d.Index < len(embeddings) {
-			embeddings[d.Index] = d.Embedding
-		}
+	for i, d := range result.Data {
+		embeddings[i] = d.Embedding
 	}
 	return embeddings, nil
 }
